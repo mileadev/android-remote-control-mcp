@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           # Full history + tags: build.gradle.kts derives versionName/versionCode from
@@ -34,17 +34,20 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          # fail if gradle-wrapper.jar is not an official Gradle wrapper JAR
+          validate-wrappers: true
 
       - name: Cache ngrok-java JAR
         id: cache-ngrok-jar
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: vendor/ngrok-java/ngrok-java/target/ngrok-java-1.2.0-SNAPSHOT.jar
           key: ngrok-jar-v2-${{ runner.os }}-${{ hashFiles('vendor/ngrok-java/ngrok-java/pom.xml', 'vendor/ngrok-java/ngrok-java/src/**') }}
@@ -70,7 +73,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           # Full history + tags: build.gradle.kts derives versionName/versionCode from
@@ -78,14 +81,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Cache ngrok-java host native build
         id: cache-ngrok-host
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             vendor/ngrok-java/ngrok-java/target/ngrok-java-1.2.0-SNAPSHOT.jar
@@ -97,7 +100,7 @@ jobs:
 
       - name: Cache Maven repository
         if: steps.cache-ngrok-host.outputs.cache-hit != 'true'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.m2/repository
           key: maven-${{ runner.os }}-${{ hashFiles('vendor/ngrok-java/**/pom.xml') }}
@@ -106,14 +109,23 @@ jobs:
 
       - name: Set up Rust
         if: steps.cache-ngrok-host.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          # fail if gradle-wrapper.jar is not an official Gradle wrapper JAR
+          validate-wrappers: true
 
-      - name: Install cloudflared
+      - name: Install cloudflared (pinned)
+        env:
+          CLOUDFLARED_VERSION: "2026.10.0"
+          # sha256 verified locally over both the standalone release asset and the
+          # binary payload of the matching cloudflared-linux-amd64.deb (2026.10.0)
+          CLOUDFLARED_SHA256: "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db"
         run: |
-          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          curl -fsSL "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" -o /usr/local/bin/cloudflared
+          echo "${CLOUDFLARED_SHA256}  /usr/local/bin/cloudflared" | sha256sum --check --status
           chmod +x /usr/local/bin/cloudflared
           cloudflared --version
 
@@ -137,7 +149,7 @@ jobs:
 
       - name: Upload unit test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: unit-test-results
           path: app/build/reports/tests/
@@ -145,7 +157,7 @@ jobs:
 
       - name: Upload Jacoco coverage report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-report
           path: |
@@ -159,7 +171,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           # Full history + tags: build.gradle.kts derives versionName/versionCode from
@@ -167,14 +179,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Cache cloudflared Android native
         id: cache-cloudflared
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libcloudflared.so
@@ -183,7 +195,7 @@ jobs:
 
       - name: Cache ngrok-java Android native
         id: cache-ngrok-android
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libngrok_java.so
@@ -194,18 +206,21 @@ jobs:
 
       - name: Set up Go
         if: steps.cache-cloudflared.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.25.6'
 
       - name: Set up Rust
         if: steps.cache-ngrok-android.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          # fail if gradle-wrapper.jar is not an official Gradle wrapper JAR
+          validate-wrappers: true
 
       - name: Compile cloudflared for Android
         if: steps.cache-cloudflared.outputs.cache-hit != 'true'
@@ -219,7 +234,7 @@ jobs:
           JAVA_17_HOME: ${{ env.JAVA_HOME }}
 
       - name: Set up Python (geolocation DB generator)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -228,7 +243,7 @@ jobs:
         run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
 
       - name: Cache DB-IP source CSV
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .dbip-cache
           key: dbip-csv-${{ steps.dbip-month.outputs.month }}
@@ -274,9 +289,12 @@ jobs:
           sudo apt-get install -y -qq podman
           sudo systemctl enable --now podman.socket
           sudo chmod 755 /run/podman
-          sudo chmod 666 /run/podman/podman.sock
-          # Verify socket is accessible
+          # Runner-owned socket instead of world-write (chmod 666 is never used on container sockets)
+          sudo chown "$(id -un):$(id -gn)" /run/podman/podman.sock
+          sudo chmod 660 /run/podman/podman.sock
+          # Verify socket is accessible without sudo and NOT world-writable
           curl -s --unix-socket /run/podman/podman.sock http://localhost/_ping
+          test "$(stat -c %a /run/podman/podman.sock)" = "660"
 
       - name: Pre-pull redroid image
         run: sudo podman pull redroid/redroid:14.0.0-latest
@@ -289,7 +307,7 @@ jobs:
 
       - name: Upload E2E test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: e2e-test-results
           path: e2e-tests/build/reports/tests/
@@ -313,7 +331,7 @@ jobs:
             cap: Foss
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: true
           # Full history + tags: build.gradle.kts derives versionName/versionCode from
@@ -323,14 +341,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Cache cloudflared Android native
         id: cache-cloudflared
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libcloudflared.so
@@ -339,7 +357,7 @@ jobs:
 
       - name: Cache ngrok-java Android native
         id: cache-ngrok-android
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libngrok_java.so
@@ -350,18 +368,21 @@ jobs:
 
       - name: Set up Go
         if: steps.cache-cloudflared.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.25.6'
 
       - name: Set up Rust
         if: steps.cache-ngrok-android.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          # fail if gradle-wrapper.jar is not an official Gradle wrapper JAR
+          validate-wrappers: true
 
       - name: Compile cloudflared for Android
         if: steps.cache-cloudflared.outputs.cache-hit != 'true'
@@ -375,7 +396,7 @@ jobs:
           JAVA_17_HOME: ${{ env.JAVA_HOME }}
 
       - name: Set up Python (geolocation DB generator)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -384,7 +405,7 @@ jobs:
         run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
 
       - name: Cache DB-IP source CSV
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .dbip-cache
           key: dbip-csv-${{ steps.dbip-month.outputs.month }}
@@ -393,14 +414,14 @@ jobs:
         run: ./gradlew assemble${{ matrix.cap }}Debug assemble${{ matrix.cap }}Release
 
       - name: Upload ${{ matrix.label }} debug APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-${{ matrix.flavor }}-debug
           path: app/build/outputs/apk/${{ matrix.flavor }}/debug/app-${{ matrix.flavor }}-debug.apk
           retention-days: 30
 
       - name: Upload ${{ matrix.label }} release APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: app-${{ matrix.flavor }}-release
           path: app/build/outputs/apk/${{ matrix.flavor }}/release/app-${{ matrix.flavor }}-release-unsigned.apk
