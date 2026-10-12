@@ -161,16 +161,27 @@ class McpServer(
     }
 
     private fun io.ktor.server.application.Application.configureApplication() {
-        // Base plugins in the canonical order (ContentNegotiation → CORS → auth). CORS MUST precede
-        // auth so browser preflight OPTIONS (no Authorization header) are answered by CORS instead of
-        // being failed closed by auth. The order lives in installMcpBasePlugins so it stays consistent
-        // between production and the integration tests.
+        // Base plugins in the canonical order (ContentNegotiation → origin policy → CORS → auth).
+        // The origin policy plugin (Origin/Host enforcement, active in hardened builds) must precede
+        // CORS, and CORS MUST precede auth so browser preflight OPTIONS (no Authorization header) are
+        // answered by CORS instead of being failed closed by auth. The order lives in
+        // installMcpBasePlugins so it stays consistent between production and the integration tests.
         //
         // Combined MCP authentication: static bearer OR issued OAuth access token (dual-accept).
         // Excludes /health, the unauthenticated OAuth endpoints, the /.well-known/ namespace, and the
         // /s/ capability route. Exact paths are used for the OAuth endpoints (not prefixes) so sibling
         // routes are not silently exempted.
-        installMcpBasePlugins {
+        installMcpBasePlugins(
+            configureOriginPolicy = {
+                // Centrally provisioned allowlist from ServerConfig; create() fail-fasts at server
+                // start when the hardened build is misconfigured (any-origin override, bad entries).
+                policy =
+                    RequestOriginPolicy.create(
+                        isLabHardened = BuildConfig.LAB_HARDENED,
+                        approvedOrigins = config.approvedOrigins,
+                    )
+            },
+        ) {
             bearerTokenEnabled = config.bearerTokenEnabled
             expectedToken = config.bearerToken
             oauthEnabled = config.oauthEnabled

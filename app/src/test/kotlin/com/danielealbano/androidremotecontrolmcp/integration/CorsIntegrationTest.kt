@@ -1,5 +1,7 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.mcp.RequestOriginPolicy
 import com.danielealbano.androidremotecontrolmcp.mcp.effectiveBaseUrl
 import com.danielealbano.androidremotecontrolmcp.mcp.installMcpBasePlugins
 import com.danielealbano.androidremotecontrolmcp.mcp.installMcpStatelessTransport
@@ -30,6 +32,14 @@ import org.junit.jupiter.api.Test
 
 @DisplayName("CORS Integration Tests")
 class CorsIntegrationTest {
+    /** Cross-origin allowlist entry used when the hardened flavor enforces origin topology. */
+    private companion object {
+        const val APPROVED_CROSS_ORIGIN = "https://inspector.example.com"
+    }
+
+    /** Hardened builds reflect the exact approved origin; gms/foss keep the `*` wildcard. */
+    private fun expectedAllowOrigin(): String = if (BuildConfig.LAB_HARDENED) APPROVED_CROSS_ORIGIN else "*"
+
     @BeforeEach
     fun setUp() {
         McpIntegrationTestHelper.mockAndroidLog()
@@ -48,6 +58,11 @@ class CorsIntegrationTest {
      * `/register` route (both auth-excluded) plus `/mcp`. The full OAuth routes with CORS are exercised
      * by the OAuth-flow suite via `McpIntegrationTestHelper.withOAuthTestApplication`.
      *
+     * On the hardened lab flavor it also installs a strict [RequestOriginPolicy] whose only approved
+     * cross-origin is [APPROVED_CROSS_ORIGIN] (hardened `create` fails fast on bad entries); gms/foss
+     * fall through to the permissive default (anyHost()). Asserted `Access-Control-Allow-Origin`
+     * values are therefore flavor-aware via [expectedAllowOrigin].
+     *
      * @param oauthEnabled When true, auth emits the RFC 9728 `WWW-Authenticate` discovery header on 401
      *   (the OAuth token check always denies here — only the 401 header path is under test).
      */
@@ -59,7 +74,15 @@ class CorsIntegrationTest {
         val sdkServer = McpIntegrationTestHelper.createSdkServer(deps)
         testApplication {
             application {
-                installMcpBasePlugins {
+                installMcpBasePlugins(
+                    configureOriginPolicy = {
+                        policy =
+                            RequestOriginPolicy.create(
+                                isLabHardened = BuildConfig.LAB_HARDENED,
+                                approvedOrigins = setOf(APPROVED_CROSS_ORIGIN),
+                            )
+                    },
+                ) {
                     bearerTokenEnabled = true
                     expectedToken = McpIntegrationTestHelper.TEST_BEARER_TOKEN
                     this.oauthEnabled = oauthEnabled
@@ -102,7 +125,7 @@ class CorsIntegrationTest {
                     }
 
                 assertTrue(response.status.value in 200..299, "preflight should succeed, was ${response.status}")
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
                 val allowedHeaders =
                     response.headerTokens(HttpHeaders.AccessControlAllowHeaders).map { it.lowercase() }
                 listOf("authorization", "content-type", "mcp-protocol-version", "mcp-session-id").forEach {
@@ -127,7 +150,7 @@ class CorsIntegrationTest {
                     }
 
                 assertTrue(response.status.value in 200..299, "preflight should succeed, was ${response.status}")
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
             }
         }
 
@@ -140,7 +163,7 @@ class CorsIntegrationTest {
                         header(HttpHeaders.Origin, "https://inspector.example.com")
                     }
 
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
                 val exposed = response.headers[HttpHeaders.AccessControlExposeHeaders].orEmpty()
                 assertTrue(
                     exposed.split(",").any { it.trim().equals("mcp-session-id", ignoreCase = true) },
@@ -161,7 +184,7 @@ class CorsIntegrationTest {
                     }
 
                 assertEquals(HttpStatusCode.Unauthorized, response.status)
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
             }
         }
 
@@ -187,7 +210,7 @@ class CorsIntegrationTest {
                     response.status.value in 200..299,
                     "authenticated initialize should succeed (2xx), was ${response.status}",
                 )
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
             }
         }
 
@@ -203,7 +226,7 @@ class CorsIntegrationTest {
                     }
 
                 assertEquals(HttpStatusCode.Unauthorized, response.status)
-                assertEquals("*", response.allowOrigin())
+                assertEquals(expectedAllowOrigin(), response.allowOrigin())
                 // The discovery header is actually sent...
                 val wwwAuth = response.headers[HttpHeaders.WWWAuthenticate].orEmpty()
                 assertTrue(
