@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hardened lab debug combined overlay (handoff backlog item H-07: prevent debug/test
+     receiver merge into release AND out of lab debug builds).
+
+     The two E2E/test receivers are declared in the debug build-type manifest
+     (src/debug/AndroidManifest.xml), and the manifest merger applies build-type overlays
+     AFTER flavor overlays, so a tools:node="remove" in app/src/labHardened cannot strip
+     them. A flavor x buildType combined source set (this file) is the highest-priority
+     manifest; its remove instructions are applied last, so both receivers are absent from
+     the labHardenedDebug merged manifest even though this variant merges the debug source
+     set. Other variants are unaffected:
+     - labHardenedRelease never merges src/debug, so nothing changes there.
+     - gms/foss debug builds keep the receivers (upstream behavior, used by e2e flows). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <receiver
+            android:name="com.danielealbano.androidremotecontrolmcp.debug.E2EConfigReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name="com.danielealbano.androidremotecontrolmcp.debug.OAuthApprovalTestReceiver"
+            tools:node="remove" />
+    </application>
+</manifest>
