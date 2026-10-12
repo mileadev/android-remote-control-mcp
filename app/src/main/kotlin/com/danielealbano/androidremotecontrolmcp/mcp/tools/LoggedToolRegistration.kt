@@ -5,15 +5,32 @@ import com.danielealbano.androidremotecontrolmcp.data.repository.ServerLogReposi
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.isActive
 import kotlin.coroutines.coroutineContext
 
 private const val NANOS_PER_MILLI = 1_000_000L
 private const val FAILED_MARKER = "failed"
+private const val DENIED_MARKER = "denied"
 
 /**
- * Wraps a tool handler so every invocation records a TOOL_CALL server-log entry: un-prefixed tool
+ * Error result for tool calls rejected by the [ToolPolicyGate]. The text names only the
+ * tool and the policy: no config contents or store internals are revealed.
+ */
+private fun policyDeniedResult(toolName: String): CallToolResult =
+    CallToolResult(
+        content = listOf(TextContent(text = "Tool '$toolName' is denied by the tool capability policy.")),
+        isError = true,
+    )
+
+/**
+ * Wraps a tool handler so every invocation is checked by [toolPolicyGate] at dispatch
+ * time first: a denied call returns a policy-denied error result without ever reaching
+ * [handler], and is recorded in the server log as a [ServerLogEntry.Type.TOOL_CALL]
+ * entry with the constant NON-SENSITIVE [DENIED_MARKER] (duration 0).
+ *
+ * Allowed calls record a TOOL_CALL server-log entry: un-prefixed tool
  * name + duration, plus the constant NON-SENSITIVE [FAILED_MARKER] on failure (isError result or
  * thrown exception). Parameters and free-form error text are NEVER logged (tool errors can echo
  * device-derived data such as URLs). try/finally keeps the wrapper fully transparent — NO
@@ -24,39 +41,50 @@ internal fun loggedToolHandler(
     serverLog: ServerLogRepository,
     toolName: String,
     toolCallIndicator: ToolCallIndicator = ToolCallIndicator.NONE,
+    toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
     handler: suspend (CallToolRequest) -> CallToolResult,
 ): suspend (CallToolRequest) -> CallToolResult =
     { request ->
-        val startNs = System.nanoTime()
-        var completed: CallToolResult? = null
-        runCatching { toolCallIndicator.onToolCallStarted(toolName) }
-        try {
-            val result = handler(request)
-            completed = result
-            result
-        } finally {
-            runCatching { toolCallIndicator.onToolCallFinished(toolName) }
-            val durationMs = (System.nanoTime() - startNs) / NANOS_PER_MILLI
-            val result = completed
-            when {
-                result != null -> {
-                    serverLog.log(
-                        type = ServerLogEntry.Type.TOOL_CALL,
-                        message = if (result.isError == true) FAILED_MARKER else "",
-                        toolName = toolName,
-                        durationMs = durationMs,
-                    )
-                }
+        if (toolPolicyGate.allows(toolName)) {
+            val startNs = System.nanoTime()
+            var completed: CallToolResult? = null
+            runCatching { toolCallIndicator.onToolCallStarted(toolName) }
+            try {
+                val result = handler(request)
+                completed = result
+                result
+            } finally {
+                runCatching { toolCallIndicator.onToolCallFinished(toolName) }
+                val durationMs = (System.nanoTime() - startNs) / NANOS_PER_MILLI
+                val result = completed
+                when {
+                    result != null -> {
+                        serverLog.log(
+                            type = ServerLogEntry.Type.TOOL_CALL,
+                            message = if (result.isError == true) FAILED_MARKER else "",
+                            toolName = toolName,
+                            durationMs = durationMs,
+                        )
+                    }
 
-                coroutineContext.isActive -> {
-                    serverLog.log(
-                        type = ServerLogEntry.Type.TOOL_CALL,
-                        message = FAILED_MARKER,
-                        toolName = toolName,
-                        durationMs = durationMs,
-                    )
+                    coroutineContext.isActive -> {
+                        serverLog.log(
+                            type = ServerLogEntry.Type.TOOL_CALL,
+                            message = FAILED_MARKER,
+                            toolName = toolName,
+                            durationMs = durationMs,
+                        )
+                    }
                 }
             }
+        } else {
+            serverLog.log(
+                type = ServerLogEntry.Type.TOOL_CALL,
+                message = DENIED_MARKER,
+                toolName = toolName,
+                durationMs = 0L,
+            )
+            policyDeniedResult(toolName)
         }
     }
 
@@ -71,6 +99,7 @@ class LoggedToolRegistrar(
     private val server: Server,
     private val serverLog: ServerLogRepository,
     private val toolCallIndicator: ToolCallIndicator = ToolCallIndicator.NONE,
+    private val toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
 ) {
     /** [Server.addTool] with per-call TOOL_CALL logging. [toolName] is the un-prefixed display name. */
     fun addTool(
@@ -80,7 +109,7 @@ class LoggedToolRegistrar(
         inputSchema: ToolSchema,
         handler: suspend (CallToolRequest) -> CallToolResult,
     ) {
-        val wrapped = loggedToolHandler(serverLog, toolName, toolCallIndicator, handler)
+        val wrapped = loggedToolHandler(serverLog, toolName, toolCallIndicator, toolPolicyGate, handler)
         server.addTool(name = name, description = description, inputSchema = inputSchema) { request ->
             wrapped(request)
         }

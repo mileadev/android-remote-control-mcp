@@ -24,6 +24,7 @@ import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthServerDeps
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.installOAuthRoutes
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.LoggedToolRegistrar
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.McpToolUtils
+import com.danielealbano.androidremotecontrolmcp.mcp.tools.ToolPolicyGate
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerAppManagementTools
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerCameraTools
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerFileTools
@@ -251,9 +252,10 @@ object McpIntegrationTestHelper {
         deps: MockDependencies,
         deviceSlug: String = "",
         perms: ToolPermissionsConfig = ToolPermissionsConfig(),
+        toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
     ) {
         val toolNamePrefix = McpToolUtils.buildToolNamePrefix(deviceSlug)
-        val registrar = LoggedToolRegistrar(server, deps.serverLog)
+        val registrar = LoggedToolRegistrar(server, deps.serverLog, toolPolicyGate = toolPolicyGate)
         registerScreenIntrospectionTools(
             registrar,
             deps.treeParser,
@@ -387,6 +389,7 @@ object McpIntegrationTestHelper {
         deps: MockDependencies,
         deviceSlug: String = "",
         perms: ToolPermissionsConfig = ToolPermissionsConfig(),
+        toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
     ): Server {
         val server =
             Server(
@@ -403,7 +406,7 @@ object McpIntegrationTestHelper {
                             ),
                     ),
             )
-        registerAllTools(server, deps, deviceSlug, perms)
+        registerAllTools(server, deps, deviceSlug, perms, toolPolicyGate)
         return server
     }
 
@@ -422,9 +425,10 @@ object McpIntegrationTestHelper {
         deps: MockDependencies = createMockDependencies(),
         deviceSlug: String = "",
         perms: ToolPermissionsConfig = ToolPermissionsConfig(),
+        toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
         testBlock: suspend (client: Client, deps: MockDependencies) -> Unit,
     ) {
-        val sdkServer = createSdkServer(deps, deviceSlug, perms)
+        val sdkServer = createSdkServer(deps, deviceSlug, perms, toolPolicyGate)
 
         testApplication {
             application {
