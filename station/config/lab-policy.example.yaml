@@ -1,0 +1,85 @@
+# Hardened lab station policy (schema station-policy-1).
+# Fail-closed defaults: anything not explicitly allowed is denied.
+# Load via station.lab_policy.load_lab_policy_file, never trust raw YAML alone.
+schema_version: station-policy-1
+mode: deny_by_default
+
+control_plane:
+  expose_public_http: false
+  transport: mtls_private
+  require_oidc_identity: true
+  audit_timestamp_format: iso8601_utc
+
+session:
+  exclusive_device_lease: true
+  require_station_fencing_generation: true
+  lease_ttl_seconds: 900
+  heartbeat_seconds: 60
+  deny_on_backend_unavailable: true
+  idempotency_ttl_seconds: 300
+
+device_enrollment:
+  explicit_serial_allowlist: true
+  allow_mdns_autoconnect: false
+  allow_adb_tcp_public: false
+  allow_root_on_stock_devices: false
+
+native_mcp:
+  device_bind_address: "127.0.0.1"
+  device_port: 8765
+  require_auth: true
+  allow_dual_auth_disabled: false
+  allow_any_origin: false
+  require_allowlisted_host: true
+  enable_public_tunnels: false
+  enable_http_download: false
+  allow_unverified_https_certs: false
+  allowed_tool_ids:
+    - android_device_inventory
+    - android_device_capabilities
+    - android_session_acquire
+    - android_session_renew
+    - android_session_release
+    - android_ui_observe
+    - android_ui_batch
+    - android_ui_wait
+    - android_api_describe
+    - android_api_invoke_typed
+    - android_tests_submit
+    - android_tests_status
+
+station:
+  allowed_operations:
+    - android.devices.list
+    - android.devices.capabilities
+    - android.sessions.acquire
+    - android.sessions.renew
+    - android.sessions.release
+    - android.ui.observe
+    - android.ui.batch
+    - android.ui.wait
+    - android.api.describe
+    - android.api.invoke_typed
+    - android.tests.submit
+    - android.tests.status
+  never_expose_to_llm:
+    - raw_adb_shell
+    - raw_reflection
+    - arbitrary_code
+    - flash
+    - root
+    - unknown_download_url
+    - android.video.session
+    - android.logs.query
+  release_on_lease_expiry: true
+  reject_ats_owned_devices: true
+
+logging:
+  log_payloads: false
+  log_secrets: false
+  log_ui_content_by_default: false
+  record_request_id: true
+
+privileged_pool:
+  enabled: true
+  requires_operator_approval: true
