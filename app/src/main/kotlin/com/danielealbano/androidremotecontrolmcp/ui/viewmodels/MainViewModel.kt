@@ -506,12 +506,6 @@ class MainViewModel
             }
         }
 
-        fun updateAllowUnverifiedHttpsCerts(enabled: Boolean) {
-            viewModelScope.launch(ioDispatcher) {
-                settingsRepository.updateAllowUnverifiedHttpsCerts(enabled)
-            }
-        }
-
         fun updateDeviceSlug(slug: String) {
             _deviceSlugInput.value = slug
 

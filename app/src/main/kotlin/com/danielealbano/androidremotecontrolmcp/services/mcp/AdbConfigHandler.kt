@@ -70,7 +70,6 @@ class AdbConfigHandler(
         applyNgrokDomain(intent)
         applyFileSizeLimit(intent)
         applyAllowHttpDownloads(intent)
-        applyAllowUnverifiedHttpsCerts(intent)
         applyDownloadTimeout(intent)
         applyDeviceSlug(intent)
         applyToolPermissions(intent)
@@ -314,13 +313,6 @@ class AdbConfigHandler(
         Log.i(TAG, "Allow HTTP downloads updated to $value")
     }
 
-    private suspend fun applyAllowUnverifiedHttpsCerts(intent: Intent) {
-        if (!intent.hasExtra(EXTRA_ALLOW_UNVERIFIED_HTTPS_CERTS)) return
-        val value = intent.getBooleanExtra(EXTRA_ALLOW_UNVERIFIED_HTTPS_CERTS, false)
-        settingsRepository.updateAllowUnverifiedHttpsCerts(value)
-        Log.i(TAG, "Allow unverified HTTPS certs updated to $value")
-    }
-
     private suspend fun applyDownloadTimeout(intent: Intent) {
         if (!intent.hasExtra(EXTRA_DOWNLOAD_TIMEOUT_SECONDS)) return
         val value = intent.getIntExtra(EXTRA_DOWNLOAD_TIMEOUT_SECONDS, -1)
@@ -421,7 +413,6 @@ class AdbConfigHandler(
         internal const val EXTRA_NGROK_DOMAIN = "ngrok_domain"
         internal const val EXTRA_FILE_SIZE_LIMIT_MB = "file_size_limit_mb"
         internal const val EXTRA_ALLOW_HTTP_DOWNLOADS = "allow_http_downloads"
-        internal const val EXTRA_ALLOW_UNVERIFIED_HTTPS_CERTS = "allow_unverified_https_certs"
         internal const val EXTRA_DOWNLOAD_TIMEOUT_SECONDS = "download_timeout_seconds"
         internal const val EXTRA_DEVICE_SLUG = "device_slug"
         internal const val EXTRA_TOOL_PERMISSIONS = "tool_permissions"
