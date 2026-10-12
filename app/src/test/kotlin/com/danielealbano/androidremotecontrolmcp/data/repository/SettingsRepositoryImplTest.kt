@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.BindingAddress
 import com.danielealbano.androidremotecontrolmcp.data.model.BuiltinPermissions
 import com.danielealbano.androidremotecontrolmcp.data.model.CertificateSource
@@ -1395,7 +1396,13 @@ class SettingsRepositoryImplTest {
                 repository.updateToolPermissionsConfig(ToolPermissionsConfig())
 
                 val result = repository.getServerConfig()
-                assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                if (BuildConfig.LAB_HARDENED) {
+                    // The denylist-shaped document is normalized to the deny-by-default
+                    // policy, which round-trips as the same fail-closed configuration.
+                    assertEquals(ToolPermissionsConfig.DENY_ALL, result.toolPermissionsConfig)
+                } else {
+                    assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                }
             }
 
         @Test
@@ -1406,7 +1413,12 @@ class SettingsRepositoryImplTest {
                 }
 
                 val result = repository.getServerConfig()
-                assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                if (BuildConfig.LAB_HARDENED) {
+                    // Hardened policy fails closed instead of falling back open.
+                    assertEquals(ToolPermissionsConfig.DENY_ALL, result.toolPermissionsConfig)
+                } else {
+                    assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                }
             }
 
         @Test

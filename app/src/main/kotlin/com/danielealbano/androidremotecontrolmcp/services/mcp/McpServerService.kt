@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.McpApplication
 import com.danielealbano.androidremotecontrolmcp.R
 import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermissions
@@ -30,6 +31,7 @@ import com.danielealbano.androidremotecontrolmcp.mcp.tools.LoggedToolRegistrar
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.McpToolUtils
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.ReferenceCountedToolCallIndicator
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.ToolCallIndicator
+import com.danielealbano.androidremotecontrolmcp.mcp.tools.ToolPolicyGate
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerAppManagementTools
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerCameraTools
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.registerFileTools
@@ -448,11 +450,21 @@ class McpServerService : Service() {
     ) {
         val toolCallIndicator = ReferenceCountedToolCallIndicator(AccessibilityToolCallIndicator())
         toolCallIndicator.setEnabled(toolCallIndicatorEnabled)
+        // Hardened builds enforce the CURRENT tool capability policy on every dispatched
+        // call and fail closed on policy-store read errors; other flavors keep the
+        // upstream registration-time enforcement only.
+        val toolPolicyGate =
+            if (BuildConfig.LAB_HARDENED) {
+                ToolPolicyGate { settingsRepository.getServerConfig().toolPermissionsConfig }
+            } else {
+                ToolPolicyGate.INACTIVE
+            }
         val registrar =
             LoggedToolRegistrar(
                 server,
                 serverLogRepository,
                 toolCallIndicator,
+                toolPolicyGate,
             )
         registerAccessibilityToolBundle(registrar, toolNamePrefix, perms)
         registerFileTools(registrar, storageLocationProvider, fileOperationProvider, toolNamePrefix, perms)

@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.AvailableUpdate
 import com.danielealbano.androidremotecontrolmcp.data.model.BindingAddress
 import com.danielealbano.androidremotecontrolmcp.data.model.BuiltinPermissions
@@ -93,6 +94,18 @@ private val HOSTNAME_PATTERN =
 // Non-override helpers extracted to top-level (file-private) to keep the class within detekt LargeClass.
 
 /**
+ * Persistence policy for the stored tool-permission document: hardened builds fail
+ * closed (deny-by-default catalog) on null, corrupt or partial documents; other
+ * flavors keep the upstream all-enabled fallback.
+ */
+private val toolPermissionsPolicyMode: ToolPermissionsConfig.PolicyMode =
+    if (BuildConfig.LAB_HARDENED) {
+        ToolPermissionsConfig.PolicyMode.FAIL_CLOSED
+    } else {
+        ToolPermissionsConfig.PolicyMode.PERMISSIVE_DEFAULT
+    }
+
+/**
  * Maps raw [Preferences] to a [ServerConfig] instance, applying defaults
  * for any missing keys.
  */
@@ -141,7 +154,8 @@ private fun mapPreferencesToServerConfig(prefs: Preferences): ServerConfig {
         oauthEnabled = prefs[OAUTH_ENABLED_KEY] ?: true,
         bearerTokenEnabled = prefs[BEARER_TOKEN_ENABLED_KEY] ?: true,
         publicUrlOverride = prefs[PUBLIC_URL_OVERRIDE_KEY] ?: "",
-        toolPermissionsConfig = ToolPermissionsConfig.fromJsonOrDefault(prefs[TOOL_PERMISSIONS_KEY]),
+        toolPermissionsConfig =
+            ToolPermissionsConfig.fromJsonForPolicy(prefs[TOOL_PERMISSIONS_KEY], toolPermissionsPolicyMode),
         privacyModeConfig = PrivacyModeConfig.fromJsonOrDefault(prefs[PRIVACY_MODE_CONFIG_KEY]),
         hideFromRecents = prefs[HIDE_FROM_RECENTS_KEY] ?: false,
     )
@@ -168,6 +182,18 @@ private fun logToolPermissionsDiff(
     (old.disabledTools - new.disabledTools).forEach { tool ->
         logger.submit("tool:$tool", "disabled", "enabled") { _, _ -> "Tool '$tool' enabled" }
     }
+    // Hardened allowlist diffs: empty on both sides for upstream denylist documents, so
+    // other flavors log exactly the same entries as before.
+    val oldAllowedToolIds = old.allowedToolIds ?: emptySet()
+    val newAllowedToolIds = new.allowedToolIds ?: emptySet()
+    (newAllowedToolIds - oldAllowedToolIds).forEach { tool ->
+        logger.submit("tool_allow:$tool", "denied", "allowed") { _, _ -> "Tool '$tool' allowlisted" }
+    }
+    (oldAllowedToolIds - newAllowedToolIds).forEach { tool ->
+        logger.submit("tool_allow:$tool", "allowed", "denied") { _, _ ->
+            "Tool '$tool' no longer allowlisted"
+        }
+    }
     (new.disabledParams.keys + old.disabledParams.keys).forEach { tool ->
         val oldParams = old.disabledParams[tool].orEmpty()
         val newParams = new.disabledParams[tool].orEmpty()
@@ -181,6 +207,61 @@ private fun logToolPermissionsDiff(
                 "Parameter '$param' of tool '$tool' enabled"
             }
         }
+    }
+}
+
+/**
+ * Normalizes an upstream denylist-shaped document for persistence under the active
+ * policy: hardened builds store denylist-only configs as the hardened schema with an
+ * empty allowlist so the next load denies every tool instead of falling back open.
+ */
+private fun normalizeToolPermissionsForPolicy(config: ToolPermissionsConfig): ToolPermissionsConfig =
+    if (BuildConfig.LAB_HARDENED && config.allowedToolIds == null) {
+        config.copy(allowedToolIds = emptySet())
+    } else {
+        config
+    }
+
+/**
+ * Applies a tool toggle under the active policy. With a hardened allowlist in place
+ * (see [ToolPermissionsConfig.isToolEnabled]) enabling adds the tool to the allowlist and
+ * clears any explicit denial, while disabling records an explicit denial and leaves the
+ * allowlist intact: a disabled entry is an operator denial that stays ANDed with the
+ * allowlist. Documents without an allowlist toggle the upstream denylist only.
+ */
+private fun applyToolToggle(
+    current: ToolPermissionsConfig,
+    toolName: String,
+    enabled: Boolean,
+): ToolPermissionsConfig {
+    val updatedDisabledTools = if (enabled) current.disabledTools - toolName else current.disabledTools + toolName
+    return when (val allowedToolIds = current.allowedToolIds) {
+        null -> {
+            current.copy(disabledTools = updatedDisabledTools)
+        }
+
+        else -> {
+            val updatedAllowedToolIds = if (enabled) allowedToolIds + toolName else allowedToolIds
+            current.copy(allowedToolIds = updatedAllowedToolIds, disabledTools = updatedDisabledTools)
+        }
+    }
+}
+
+/**
+ * Reads the persisted tool-permission document, applies [transform], persists the result
+ * and records the diff against the pre-edit document.
+ */
+private suspend fun editToolPermissions(
+    dataStore: DataStore<Preferences>,
+    settingsChangeLogger: SettingsChangeLogger,
+    transform: (ToolPermissionsConfig) -> ToolPermissionsConfig,
+) {
+    dataStore.edit { prefs ->
+        val current =
+            ToolPermissionsConfig.fromJsonForPolicy(prefs[TOOL_PERMISSIONS_KEY], toolPermissionsPolicyMode)
+        val updated = transform(current)
+        prefs[TOOL_PERMISSIONS_KEY] = updated.toJson()
+        logToolPermissionsDiff(settingsChangeLogger, current, updated)
     }
 }
 
@@ -541,30 +622,13 @@ class SettingsRepositoryImpl
         override suspend fun updateDeviceSlug(slug: String) =
             logScalarChange(DEVICE_SLUG_KEY, "device_slug", slug, "") { o, n -> "Device slug changed $o → $n" }
 
-        override suspend fun updateToolPermissionsConfig(config: ToolPermissionsConfig) {
-            dataStore.edit { prefs ->
-                val old = ToolPermissionsConfig.fromJsonOrDefault(prefs[TOOL_PERMISSIONS_KEY])
-                prefs[TOOL_PERMISSIONS_KEY] = config.toJson()
-                logToolPermissionsDiff(settingsChangeLogger, old, config)
-            }
-        }
+        override suspend fun updateToolPermissionsConfig(config: ToolPermissionsConfig): Unit =
+            editToolPermissions(dataStore, settingsChangeLogger) { normalizeToolPermissionsForPolicy(config) }
 
         override suspend fun updateToolEnabled(
             toolName: String,
             enabled: Boolean,
-        ) {
-            dataStore.edit { prefs ->
-                val current = ToolPermissionsConfig.fromJsonOrDefault(prefs[TOOL_PERMISSIONS_KEY])
-                val updated =
-                    if (enabled) {
-                        current.copy(disabledTools = current.disabledTools - toolName)
-                    } else {
-                        current.copy(disabledTools = current.disabledTools + toolName)
-                    }
-                prefs[TOOL_PERMISSIONS_KEY] = updated.toJson()
-                logToolPermissionsDiff(settingsChangeLogger, current, updated)
-            }
-        }
+        ) = editToolPermissions(dataStore, settingsChangeLogger) { applyToolToggle(it, toolName, enabled) }
 
         override suspend fun updateParamEnabled(
             toolName: String,
@@ -572,7 +636,11 @@ class SettingsRepositoryImpl
             enabled: Boolean,
         ) {
             dataStore.edit { prefs ->
-                val current = ToolPermissionsConfig.fromJsonOrDefault(prefs[TOOL_PERMISSIONS_KEY])
+                val current =
+                    ToolPermissionsConfig.fromJsonForPolicy(
+                        prefs[TOOL_PERMISSIONS_KEY],
+                        toolPermissionsPolicyMode,
+                    )
                 val currentParams = current.disabledParams[toolName] ?: emptySet()
                 val newParams = if (enabled) currentParams - paramName else currentParams + paramName
                 val newDisabledParams =
