@@ -231,6 +231,14 @@ android {
     productFlavors {
         create("gms") { dimension = "distribution" }
         create("foss") { dimension = "distribution" }
+        // Lab distribution flavor (handoff backlog H-01..H-12). Reuses the foss (no Google Play
+        // Services) implementation sources and differs by compile-time policy: `BuildConfig.LAB_HARDENED`
+        // switches on the enforced origin allowlist, mandatory auth, fail-closed tool policy, and
+        // TLS/cleartext restrictions. Upstream gms/foss behavior is untouched.
+        create("labHardened") {
+            dimension = "distribution"
+            buildConfigField("boolean", "LAB_HARDENED", "true")
+        }
     }
 
     // Release signing configuration (optional, uses keystore.properties if present)
@@ -281,6 +289,14 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+
+    defaultConfig {
+        buildConfigField(
+            "boolean",
+            "LAB_HARDENED",
+            "false",
+        )
     }
 
     lint {
@@ -474,6 +490,19 @@ val generateLocationDb =
     }
 
 androidComponents {
+    // The labHardened flavor reuses the foss implementation sources (foss itself has no Google Play
+    // Services code). It differs from foss by compile-time policy only: BuildConfig.LAB_HARDENED plus
+    // hardened-only overlays under app/src/labHardened (none on this baseline). Wired via the variant
+    // API instead of the legacy sourceSets block so the Kotlin compile source roots pick it up under
+    // AGP 9.
+    onVariants(
+        selector()
+            .withFlavor("distribution" to "labHardened"),
+    ) { variant ->
+        variant.sources.java?.addStaticSourceDirectory("src/foss/kotlin")
+        variant.sources.kotlin?.addStaticSourceDirectory("src/foss/kotlin")
+    }
+
     // Per-flavor debug applicationId (`…mcp.gms.debug` / `…mcp.foss.debug`) so both debug builds coexist, while
     // the release applicationId stays identical across flavors (`com.danielealbano.androidremotecontrolmcp`).
     onVariants(selector().withBuildType("debug")) { variant ->
