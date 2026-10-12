@@ -31,7 +31,8 @@ data class AuthErrorResponse(
  * Configuration for the [McpAuthPlugin].
  *
  * Authentication is required iff `bearerTokenEnabled || oauthEnabled`. With both disabled the server is
- * OPEN (explicit, allowed). A request is authorized when the static token matches OR a valid OAuth
+ * OPEN (explicit, allowed upstream; hardened builds refuse this configuration at server start, see
+ * [LabAuthGate]). A request is authorized when the static token matches OR a valid OAuth
  * access token is presented (dual-accept).
  *
  * @property bearerTokenEnabled Whether static bearer-token authentication is active.

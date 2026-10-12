@@ -5,6 +5,7 @@ import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerLogEntry
 import com.danielealbano.androidremotecontrolmcp.data.repository.ServerLogRepository
+import com.danielealbano.androidremotecontrolmcp.mcp.auth.LabAuthGate
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthAccessValidator
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthRouteDeps
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthServerDeps
@@ -76,6 +77,15 @@ class McpServer(
         Log.i(TAG, "Starting MCP server on ${config.bindingAddress.address}:${config.port}")
 
         try {
+            // Hardened distribution (H-02): refuse an OPEN or token-less auth configuration
+            // before any socket is bound. The gms/foss flavors pass LAB_HARDENED=false and are
+            // unaffected.
+            LabAuthGate.validate(
+                hardened = BuildConfig.LAB_HARDENED,
+                bearerTokenEnabled = config.bearerTokenEnabled,
+                expectedToken = config.bearerToken,
+                oauthEnabled = config.oauthEnabled,
+            )
             server =
                 if (config.httpsEnabled && httpsMaterial != null) {
                     createHttpsServer()
