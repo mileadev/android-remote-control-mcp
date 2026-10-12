@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hardened lab flavor overlay (handoff backlog item H-07: manifest/exported surfaces +
+     build variants). This source set merges on top of the main manifest for the labHardened
+     flavors only, so gms/foss merged manifests keep their upstream permission and component
+     surface unchanged.
+
+     Removed for the disposable lab image (job-required minimum):
+     - RECEIVE_BOOT_COMPLETED + BootCompletedReceiver: the lab image never self-starts after
+       reboot; the station brings the controller up explicitly and owns the session state.
+     - QUERY_ALL_PACKAGES: gms/foss declare it because the app-manager tools list every
+       installed package (docs/PROJECT.md). On the lab image visibility is narrowed to the
+       launchable-app set via the <queries> block below, so list/launch automation keeps
+       working while non-launchable packages stay invisible to policy-gated sessions.
+     - CAMERA / RECORD_AUDIO / READ_MEDIA_*: media capture and media reading are opt-in,
+       privacy-gated features, not lab job-required, and would add personal-data attack
+       surface to shared disposable devices.
+
+     Kept on purpose (minimizing these would break the job):
+     - Location (FINE/COARSE) + FOREGROUND_SERVICE_LOCATION + Wi-Fi state/scan permissions:
+       EventChannelService starts a location-type foreground service and Android 14 checks the
+       location permissions at startForeground() time; Wi-Fi events are event-channel duties.
+     - POST_NOTIFICATIONS + foreground-service permissions: McpServerService is the controller.
+     - KILL_BACKGROUND_PROCESSES: terminate-app tool stays job-required.
+
+     Not handled here on purpose: usesCleartextTraffic and trust-all TLS knobs are TLS
+     hardening (H-05); tunnel build-surface trimming is supply chain (H-08). DUMP-gated
+     ADB components (AdbConfigReceiver, AdbServiceTrampolineActivity) are untouched and
+     guarded by ExportedComponentsManifestTest. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" tools:node="remove" />
+
+    <!-- Application-child removals must live inside <application>: the manifest merger only
+         resolves component nodes (receiver/service/activity) under <application>, unlike
+         root-level permission removals above. -->
+    <application>
+        <receiver
+            android:name="com.danielealbano.androidremotecontrolmcp.services.mcp.BootCompletedReceiver"
+            tools:node="remove" />
+    </application>
+
+    <!-- Package-visibility fallback after QUERY_ALL_PACKAGES removal: lab automation still
+         resolves launchable apps for list/launch tools. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+</manifest>
