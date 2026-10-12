@@ -35,6 +35,11 @@ package com.danielealbano.androidremotecontrolmcp.data.model
  * @property publicUrlOverride Optional public base URL that pins the host used for OAuth metadata and
  *   share links (empty = auto-detect from the request).
  * @property hideFromRecents Whether to exclude the app from Android's Recent Apps / Overview screen.
+ * @property approvedOrigins Centrally provisioned allowlist of EXACT cross-origin request sources
+ *   (`scheme://host[:port]`, normalized) for the hardened lab build's Origin/Host enforcement
+ *   (see `com.danielealbano.androidremotecontrolmcp.mcp.RequestOriginPolicy`). Empty = deny all
+ *   cross-origin traffic (same-origin loopback and native clients still work). Ignored by the
+ *   permissive gms/foss flavors.
  */
 data class ServerConfig(
     val port: Int = DEFAULT_PORT,
@@ -63,6 +68,7 @@ data class ServerConfig(
     val toolPermissionsConfig: ToolPermissionsConfig = ToolPermissionsConfig(),
     val privacyModeConfig: PrivacyModeConfig = PrivacyModeConfig(),
     val hideFromRecents: Boolean = false,
+    val approvedOrigins: Set<String> = emptySet(),
 ) {
     companion object {
         /** Default server port. */
