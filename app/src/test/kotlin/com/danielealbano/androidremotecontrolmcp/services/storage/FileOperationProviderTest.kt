@@ -7,6 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerConfig
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
 import com.danielealbano.androidremotecontrolmcp.mcp.McpToolException
@@ -1038,12 +1039,27 @@ class FileOperationProviderTest {
                 val outputStream = ByteArrayOutputStream()
                 every { mockContentResolver.openOutputStream(mockFileUri, "w") } returns outputStream
 
-                // Act
-                spyProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
+                // Act and assert — permissive SSL is configured when the legacy flag is set on
+                // non-hardened builds; hardened builds fail closed before any TLS configuration.
+                if (BuildConfig.LAB_HARDENED) {
+                    val exception =
+                        runCatching {
+                            spyProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
+                        }.exceptionOrNull()
 
-                // Assert — permissive SSL was configured
-                verify { mockConnection.sslSocketFactory = any() }
-                verify { mockConnection.hostnameVerifier = any() }
+                    assertTrue(exception is McpToolException.ActionFailed)
+                    assertTrue(
+                        exception!!.message!!.contains("Permissive TLS is disabled by hardened policy"),
+                    )
+                    verify(exactly = 0) { mockConnection.sslSocketFactory = any() }
+                    verify(exactly = 0) { mockConnection.hostnameVerifier = any() }
+                } else {
+                    spyProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
+
+                    // Assert — permissive SSL was configured
+                    verify { mockConnection.sslSocketFactory = any() }
+                    verify { mockConnection.hostnameVerifier = any() }
+                }
             }
     }
 

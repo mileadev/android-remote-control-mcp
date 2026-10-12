@@ -190,9 +190,6 @@ interface SettingsRepository : EventChannelSettings {
     /** Updates whether HTTP (non-HTTPS) downloads are allowed. */
     suspend fun updateAllowHttpDownloads(enabled: Boolean)
 
-    /** Updates whether unverified HTTPS certificates are accepted for downloads. */
-    suspend fun updateAllowUnverifiedHttpsCerts(enabled: Boolean)
-
     /** Updates the download timeout in seconds. */
     suspend fun updateDownloadTimeout(seconds: Int)
 

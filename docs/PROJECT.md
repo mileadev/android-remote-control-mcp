@@ -706,7 +706,7 @@ MCP tools return data originating from the Android device (UI element text, cont
 - **ngrok Domain**: Empty (auto-assigned when empty)
 - **File Size Limit**: 50 MB (range 1-500 MB, configurable via UI, applies to all file operations)
 - **Allow HTTP Downloads**: Disabled (must be explicitly enabled to allow non-HTTPS downloads)
-- **Allow Unverified HTTPS Certificates**: Disabled (must be explicitly enabled to accept self-signed/invalid certs for downloads)
+- **Allow Unverified HTTPS Certificates**: Removed — no UI or ADB configuration surface exists any more; HTTPS certificate and hostname validation is always enforced and hardened policy fails closed if the legacy permissive TLS path is ever reached
 - **Download Timeout**: 60 seconds (range 10-300 seconds, configurable via UI)
 - **Device Slug** (`String`, default: `""`): Optional device identifier used as part of the MCP tool name prefix. When empty, tools use the `android_` prefix. When set (e.g., `pixel7`), tools use `android_pixel7_` prefix. Valid characters: letters (a-z, A-Z), digits (0-9), underscores (_). Maximum length: 20 characters.
 

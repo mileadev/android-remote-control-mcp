@@ -237,8 +237,6 @@
     <string name="storage_download_timeout_error">Must be between %1$d and %2$d seconds</string>
     <string name="storage_allow_http_downloads_label">Allow HTTP Downloads</string>
     <string name="storage_allow_http_downloads_description">Allow downloading files from unencrypted HTTP URLs (less secure)</string>
-    <string name="storage_allow_unverified_https_label">Allow Unverified HTTPS</string>
-    <string name="storage_allow_unverified_https_description">Accept unverified HTTPS certificates for downloads (less secure)</string>
 
     <!-- Event Channel — start/stop dialogs -->
     <string name="channel_not_configured_dialog_title">Endpoint URL not set</string>

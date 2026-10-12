@@ -14,6 +14,7 @@ import com.danielealbano.androidremotecontrolmcp.data.model.TunnelProviderType
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
 import com.danielealbano.androidremotecontrolmcp.services.storage.StorageLocationProvider
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
+import io.mockk.Called
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -613,15 +614,15 @@ class AdbConfigHandlerTest {
             }
 
         @Test
-        @DisplayName("allow_unverified_https_certs is applied")
-        fun allowUnverifiedHttpsCerts() =
+        @DisplayName("legacy allow_unverified_https_certs extra is ignored")
+        fun allowUnverifiedHttpsCertsExtraIgnored() =
             runTest {
                 val intent =
                     createIntent(AdbConfigReceiver.ACTION_CONFIGURE) {
-                        boolean(AdbConfigHandler.EXTRA_ALLOW_UNVERIFIED_HTTPS_CERTS, true)
+                        boolean("allow_unverified_https_certs", true)
                     }
                 handler.handle(context, intent)
-                coVerify { settingsRepository.updateAllowUnverifiedHttpsCerts(true) }
+                coVerify { settingsRepository wasNot Called }
             }
 
         @Test
@@ -734,7 +735,6 @@ class AdbConfigHandlerTest {
                 coVerify(exactly = 0) { settingsRepository.updateNgrokDomain(any()) }
                 coVerify(exactly = 0) { settingsRepository.updateFileSizeLimit(any()) }
                 coVerify(exactly = 0) { settingsRepository.updateAllowHttpDownloads(any()) }
-                coVerify(exactly = 0) { settingsRepository.updateAllowUnverifiedHttpsCerts(any()) }
                 coVerify(exactly = 0) { settingsRepository.updateDownloadTimeout(any()) }
                 coVerify(exactly = 0) { settingsRepository.updateDeviceSlug(any()) }
                 coVerify(exactly = 0) { settingsRepository.updateToolPermissionsConfig(any()) }
@@ -868,18 +868,6 @@ class AdbConfigHandlerTest {
                     }
                 handler.handle(context, intent)
                 coVerify { settingsRepository.updateAllowHttpDownloads(false) }
-            }
-
-        @Test
-        @DisplayName("allow_unverified_https_certs false is applied")
-        fun allowUnverifiedHttpsCertsFalse() =
-            runTest {
-                val intent =
-                    createIntent(AdbConfigReceiver.ACTION_CONFIGURE) {
-                        boolean(AdbConfigHandler.EXTRA_ALLOW_UNVERIFIED_HTTPS_CERTS, false)
-                    }
-                handler.handle(context, intent)
-                coVerify { settingsRepository.updateAllowUnverifiedHttpsCerts(false) }
             }
     }
 

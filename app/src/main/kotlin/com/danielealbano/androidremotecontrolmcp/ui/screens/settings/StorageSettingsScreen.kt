@@ -300,29 +300,6 @@ fun StorageSettingsScreen(
                         onCheckedChange = viewModel::updateAllowHttpDownloads,
                     )
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.storage_allow_unverified_https_label),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Text(
-                            text = stringResource(R.string.storage_allow_unverified_https_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = serverConfig.allowUnverifiedHttpsCerts,
-                        onCheckedChange = viewModel::updateAllowUnverifiedHttpsCerts,
-                    )
-                }
             }
         }
         SnackbarHost(
