@@ -24,7 +24,7 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 | DownloadUrlValidator.kt | REWORK | HTTPS-only; credential-in-URL, numeric-host, literal-IP denials (169.254.169.254, 127/8, 10/8, 172.16/12, 192.168/16, ::1, ::ffff: maps, oversized, non-HTTPS, decimal/octal encodings) | `DownloadUrlValidatorTest` |
 | FileTools.kt | MOD | labHardened removes download tool + dispatch gate (~L627: unverified HTTPS certs must be explicitly allowed) | `DownloadNetworkLabTest.deniesToolInHardenedVariant` |
 | MediaStoreDownloader / FileOperationProviderImpl / MediaStoreFileOperationsImpl | MOD | Rerouted through engine; provider-level permissive path eliminated | `FileOperationProviderTest` |
-| integration/DownloadNetworkLabTest.kt | NEW | Real-TLS loopback servers (H-09 style): private v4/v6/v4-mapped denial, cert-mismatch/expired/self-signed rejection, redirect-to-internal + DNS-rebinding denial, size/timeout caps + no-secret logging, hardened tool denial | 5 required-style tests (real sockets, no mocks) |
+| integration/DownloadNetworkLabTest.kt | NEW | Real-TLS loopback servers (H-09 style): private v4/v6/v4-mapped denial, cert-mismatch/expired/self-signed rejection, redirect-to-internal + DNS-rebinding denial, size/timeout caps + no-secret logging, hardened tool denial | 6 required-style tests (real sockets, no mocks; the sixth added by the follow-up that closed the E2E gap) |
 | FileToolsIntegrationTest / McpProtocolIntegrationTest / AuthIntegrationTest / FileOperationProviderTest / MediaStoreDownloaderTest | MOD | 7 `assumeFalse(hardened)` guards; flavor-aware counts 56/57; provider permissive-SSL seam test superseded at merge (see resolution note) | merge 3a18e51 commit message |
 
 
