@@ -102,6 +102,7 @@ private class LoopbackServerHandle(
 
     /** When there is no declared length, respond chunked (no Content-Length header) if set. */
     var chunkedResponse: Boolean = false
+
     var respondWithBody: ByteArray = ByteArray(PAYLOAD_BYTES) { index: Int -> (index % Byte.MAX_VALUE).toByte() }
 
     fun baseUrl(path: String): String = "https://$LOOPBACK_HOST:$port$path"
@@ -339,10 +340,12 @@ class DownloadNetworkLabTest {
         assertTrue(notFoundFailure.message!!.contains("HTTP status 404"), notFoundFailure.message)
         notFoundHandle.stop()
 
-        // Content-Length lie: the server declares 1000 bytes, sends 10 and stops. Whether the
-        // client sees the stream end early or waits the read timeout out, the download must fail
-        // rather than report a short body as a complete file; rolling back the partial sink is
-        // the caller's job (MediaStoreDownloader deletes the pending row).
+        // Content-Length lie: the server declares 1000 bytes, sends 10 and stops. On this JVM the
+        // loopback server keeps the connection open, so the client waits the read timeout out
+        // instead of seeing an early EOF (redroid reported "unexpected end of stream"); either way
+        // the short body must fail the download rather than be reported as a complete file. The
+        // 10 bytes that did arrive prove the failure happened mid-stream, after TLS and headers.
+        // Rolling back the partial sink is the caller's job (MediaStoreDownloader deletes the row).
         val shortHandle = startLoopbackServer(::serveLoopedBackPayload, material = trustedMaterial)
         shortHandle.respondWithBody = ByteArray(10)
         shortHandle.declaredContentLength = 1000L
@@ -357,10 +360,12 @@ class DownloadNetworkLabTest {
             }
         assertTrue(shortFailure.message!!.contains("Download failed"), shortFailure.message)
         assertInstanceOf(IOException::class.java, shortFailure.cause)
-        assertTrue(
-            partialSink.size() < shortHandle.declaredContentLength!!,
-            "a truncated body must never be reported as a completed download: ${partialSink.size()} bytes",
+        assertEquals(
+            shortHandle.respondWithBody.size,
+            partialSink.size(),
+            "the failure must happen mid-stream, after the declared body has been partly written",
         )
+        assertTrue(partialSink.size() < shortHandle.declaredContentLength!!, "a short body is not a complete file")
         shortHandle.stop()
     }
 

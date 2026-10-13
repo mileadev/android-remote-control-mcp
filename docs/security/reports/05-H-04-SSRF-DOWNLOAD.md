@@ -67,13 +67,17 @@ and the policy is not weakened; they now assert the shipped policy on-device:
 | 24 | embedded credentials are refused (`user:pass@host`) |
 | 25 | metadata `169.254.169.254`, loopback `127.0.0.1` and private `10.11.12.13` literals are blocked |
 | 26 | obfuscated numeric hosts (`2130706433`, `0177.0.0.1`) are rejected |
-| 27 | an unresolvable host fails closed with a clean transport error |
+| 27 | an unresolvable host fails closed - either `Download failed` (NXDOMAIN) or `Download blocked` (a resolver that hijacks the name with a blocked address) |
 
 Transport-level scenarios live in `DownloadNetworkLabTest` (app module), which drives the
 production download engine against **real TLS** with an injected CA and an injected loopback
 policy. Success, timeout, size cap and certificate mismatch were already covered there. The two
-that were not - an HTTP error status and a Content-Length lie (short body) - moved there in the
-same change (`rejectsHttpErrorStatusAndShortBody`), so the deleted E2E rows lost no coverage. The
+that were not - an HTTP error status and a Content-Length lie (short body) - are covered by
+`rejectsHttpErrorStatusAndShortBody`, added in the follow-up commit that closed the gap (the first
+version of this section claimed that coverage already existed, which was wrong: the 404 was only
+exercised through a fake transport and truncation had no coverage at all). That test asserts the
+fail-closed outcome rather than a specific stream error, because the JVM loopback server keeps the
+connection open and the client reports a read timeout where redroid reported an early EOF. The
 fixture server keeps only `/fixture.txt`, and `StorageE2E.configureDownloadSettings` no longer
 broadcasts the inert extra.
 

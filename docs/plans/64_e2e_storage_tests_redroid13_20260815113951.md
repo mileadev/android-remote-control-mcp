@@ -36,7 +36,7 @@ Why: shared fixtures/permissions/scan/toggle/restart/HTTP-server plumbing used b
 
 **Acceptance criteria**:
 - [x] `StorageE2E` helper object provides seeding, scanning, permission control, toggle + download-settings configuration, process-death wait, server restart with shared-client refresh, and pending/duplicate row insertion
-- [x] `FixtureHttpServer` serves 200/404/slow/truncated endpoints on the fixed exposed port
+- [x] `FixtureHttpServer` serves `/fixture.txt` on the fixed exposed port (it briefly also served 404/slow/truncated endpoints; those transport scenarios now live in `DownloadNetworkLabTest` - see the reconciliation note in `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`)
 - [x] `SharedAndroidContainer` exposes the fixture port before container start and can refresh its cached client
 - [x] `E2EConfigReceiver` gains `download_timeout_seconds` and `allow_http_downloads` extras (debug source set only)
 - [x] No main-source-set production code modified
@@ -49,6 +49,11 @@ Why: shared fixtures/permissions/scan/toggle/restart/HTTP-server plumbing used b
 - [x] Visibility changed; no callers broken
 
 ### Task 1.2: Fixture HTTP server
+
+> Historical task text. The shipped `FixtureHttpServer` keeps only `/fixture.txt`: once H-04 made
+> downloads HTTPS-only the plain-HTTP 404/slow/truncated routes were unreachable on-device, and
+> those scenarios moved to `DownloadNetworkLabTest`. See "E2E reconciliation" in
+> `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`.
 
 **Action 1.2.1** — Create `e2e-tests/src/test/kotlin/com/danielealbano/androidremotecontrolmcp/e2e/FixtureHttpServer.kt`:
 
@@ -423,7 +428,7 @@ Why: end-to-end coverage of all 8 file tools against real MediaStore, in the reg
 | 24 | `download_from_url rejects embedded credentials` | `https://user:pass@<host>/e2e.txt` → `isError` "must not contain embedded credentials"; no file |
 | 25 | `download_from_url blocks metadata loopback and private literals` | `https://169.254.169.254/latest/meta-data/`, `https://127.0.0.1/e2e.txt`, `https://10.11.12.13/e2e.txt` → `isError` "Download blocked" each; no file |
 | 26 | `download_from_url rejects non-canonical numeric hosts` | `https://2130706433/e2e.txt`, `https://0177.0.0.1/e2e.txt` → `isError` numeric-host message; no file |
-| 27 | `download_from_url fails closed when the host does not resolve` | `https://download-e2e-fixture.invalid/e2e.txt` → `isError` "Download failed"; no file |
+| 27 | `download_from_url fails closed when the host does not resolve` | `https://download-e2e-fixture.invalid/e2e.txt` → `isError` "Download failed" (NXDOMAIN) or "Download blocked" (hijacking resolver); no file |
 | 28 | `pagination returns stable non-overlapping pages` | `pictures` path=`bulk`, limit=100: pages 100/100/10; union of names == 210 seeded, no duplicates; `total_count==210` on each page; `has_more` true/true/false |
 | 29 | `pagination offset beyond end returns empty page` | offset=1000 → 0 files, `has_more==false`, `total_count==210` |
 | 30 | `limit above cap is coerced to 200` | limit=500 → exactly 200 entries, `has_more==true` |
