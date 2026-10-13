@@ -27,6 +27,8 @@ import com.danielealbano.androidremotecontrolmcp.mcp.oauth.AuthorizationCodeStor
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.JwtTokenService
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthApprovalCoordinator
 import com.danielealbano.androidremotecontrolmcp.mcp.oauth.OAuthServerDeps
+import com.danielealbano.androidremotecontrolmcp.mcp.tools.CapabilityCatalog
+import com.danielealbano.androidremotecontrolmcp.mcp.tools.CapabilityCatalogGate
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.LoggedToolRegistrar
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.McpToolUtils
 import com.danielealbano.androidremotecontrolmcp.mcp.tools.ReferenceCountedToolCallIndicator
@@ -459,12 +461,23 @@ class McpServerService : Service() {
             } else {
                 ToolPolicyGate.INACTIVE
             }
+        // Hardened builds admit only catalog-listed tools within the provisioned tier
+        // ceiling (DEFAULT_PROVISIONED_TIER: managed-grade tiers stay OFF unless
+        // explicitly provisioned); other flavors keep upstream-permissive dispatch.
+        val capabilityCatalog = CapabilityCatalog.deviceCatalog()
+        val capabilityGate =
+            if (BuildConfig.LAB_HARDENED) {
+                CapabilityCatalogGate.enforcing(capabilityCatalog)
+            } else {
+                CapabilityCatalogGate.INACTIVE
+            }
         val registrar =
             LoggedToolRegistrar(
                 server,
                 serverLogRepository,
                 toolCallIndicator,
                 toolPolicyGate,
+                capabilityGate,
             )
         registerAccessibilityToolBundle(registrar, toolNamePrefix, perms)
         registerFileTools(registrar, storageLocationProvider, fileOperationProvider, toolNamePrefix, perms)
@@ -481,6 +494,19 @@ class McpServerService : Service() {
         )
         registerLocationTools(registrar, locationProvider, privacyToolGate, toolNamePrefix, perms)
         registerSharingBundle(registrar, toolNamePrefix, perms, fileSizeLimitMb)
+        // Unit-of-work catalog integrity: a registered tool without a catalog entry (or a
+        // catalog entry without a registered tool) invalidates the dispatch gate. Hardened
+        // builds abort startup; other flavors warn and keep upstream behavior.
+        val integrity = capabilityCatalog.checkRegisteredToolNames(registrar.registeredToolNames())
+        if (!integrity.intact) {
+            val missing = integrity.missingCatalogEntries.sorted().joinToString(separator = ", ")
+            val unregistered = integrity.unregisteredCatalogEntries.sorted().joinToString(separator = ", ")
+            val detail = "missing catalog entries=[$missing], unregistered catalog entries=[$unregistered]"
+            if (BuildConfig.LAB_HARDENED) {
+                throw IllegalStateException("capability catalog integrity failure: $detail")
+            }
+            Log.w(TAG, "Capability catalog drift on unhardened build: $detail")
+        }
     }
 
     private fun registerAccessibilityToolBundle(
