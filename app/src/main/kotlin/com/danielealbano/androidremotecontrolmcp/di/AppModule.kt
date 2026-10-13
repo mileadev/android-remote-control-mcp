@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.repository.EventChannelSettings
 import com.danielealbano.androidremotecontrolmcp.data.repository.EventChannelSettingsImpl
 import com.danielealbano.androidremotecontrolmcp.data.repository.OAuthClientRepository
@@ -29,12 +30,16 @@ import com.danielealbano.androidremotecontrolmcp.services.accessibility.Accessib
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.AccessibilityNodeCacheImpl
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.AccessibilityServiceProvider
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.AccessibilityServiceProviderImpl
+import com.danielealbano.androidremotecontrolmcp.services.accessibility.AccessibilityTreeGenerationTracker
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.ActionExecutor
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.ActionExecutorImpl
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.ScreenStateSnapshotCache
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.ScreenStateSnapshotCacheImpl
+import com.danielealbano.androidremotecontrolmcp.services.accessibility.TreeGenerationTrackerImpl
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.TypeInputController
 import com.danielealbano.androidremotecontrolmcp.services.accessibility.TypeInputControllerImpl
+import com.danielealbano.androidremotecontrolmcp.services.accessibility.UiEventBatchDispatcher
+import com.danielealbano.androidremotecontrolmcp.services.accessibility.UiEventBatchQuota
 import com.danielealbano.androidremotecontrolmcp.services.apps.AppManager
 import com.danielealbano.androidremotecontrolmcp.services.apps.AppManagerImpl
 import com.danielealbano.androidremotecontrolmcp.services.camera.CameraProvider
@@ -141,6 +146,25 @@ object AppModule {
     fun providePrivacyModelStore(
         @ApplicationContext context: Context,
     ): PrivacyModelStore = PrivacyModelStore(context.filesDir)
+
+    /**
+     * Provides the H-10 UI event batch quota: stricter on lab-hardened builds
+     * ([BuildConfig.LAB_HARDENED]), same outcome contract for all flavors.
+     */
+    @Provides
+    @Singleton
+    fun provideUiEventBatchQuota(): UiEventBatchQuota = UiEventBatchQuota.forBuild(BuildConfig.LAB_HARDENED)
+
+    /**
+     * Provides the application-scoped UI event batch dispatcher (bounded, generation-aware,
+     * no-replay dispatch pipeline for fast UI events).
+     */
+    @Provides
+    @Singleton
+    fun provideUiEventBatchDispatcher(
+        quota: UiEventBatchQuota,
+        treeGenerationTracker: AccessibilityTreeGenerationTracker,
+    ): UiEventBatchDispatcher = UiEventBatchDispatcher(quota, treeGenerationTracker)
 }
 
 @Module
@@ -181,6 +205,11 @@ abstract class ServiceModule {
     @Binds
     @Singleton
     abstract fun bindAccessibilityNodeCache(impl: AccessibilityNodeCacheImpl): AccessibilityNodeCache
+
+    /** Binds the monotonically increasing accessibility tree generation tracker (H-10). */
+    @Binds
+    @Singleton
+    abstract fun bindTreeGenerationTracker(impl: TreeGenerationTrackerImpl): AccessibilityTreeGenerationTracker
 
     @Binds
     @Singleton

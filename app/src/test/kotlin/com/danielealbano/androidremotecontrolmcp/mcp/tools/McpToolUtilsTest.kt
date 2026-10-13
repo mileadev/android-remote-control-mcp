@@ -3,6 +3,7 @@ package com.danielealbano.androidremotecontrolmcp.mcp.tools
 import com.danielealbano.androidremotecontrolmcp.mcp.McpToolException
 import io.modelcontextprotocol.kotlin.sdk.types.ImageContent
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -438,13 +439,15 @@ class McpToolUtilsTest {
     @DisplayName("handleActionResult")
     inner class HandleActionResultTests {
         @Test
-        @DisplayName("returns text content on success")
-        fun returnsTextContentOnSuccess() {
-            val result = McpToolUtils.handleActionResult(Result.success(Unit), "Action done")
-            assertEquals(1, result.content.size)
-            val textContent = result.content[0] as TextContent
-            assertEquals("Action done", textContent.text)
-        }
+        @DisplayName("returns text content containing success message and completed outcome on success")
+        fun returnsTextContentOnSuccess() =
+            runTest {
+                val result = McpToolUtils.handleActionResult(Result.success(Unit), "Action done")
+                assertEquals(1, result.content.size)
+                val textContent = result.content[0] as TextContent
+                assertTrue(textContent.text.contains("Action done"))
+                assertTrue(textContent.text.contains("outcome=completed"))
+            }
 
         @Test
         @DisplayName("throws PermissionDenied for service not available")
@@ -452,7 +455,9 @@ class McpToolUtilsTest {
             val result = Result.failure<Unit>(IllegalStateException("Service is not available"))
 
             assertThrows<McpToolException.PermissionDenied> {
-                McpToolUtils.handleActionResult(result, "Action done")
+                runTest {
+                    McpToolUtils.handleActionResult(result, "Action done")
+                }
             }
         }
 
@@ -463,9 +468,12 @@ class McpToolUtilsTest {
 
             val exception =
                 assertThrows<McpToolException.ActionFailed> {
-                    McpToolUtils.handleActionResult(result, "Action done")
+                    runTest {
+                        McpToolUtils.handleActionResult(result, "Action done")
+                    }
                 }
             assertTrue(exception.message!!.contains("Something broke"))
+            assertTrue(exception.message!!.contains("outcome=failed"))
         }
     }
 

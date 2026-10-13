@@ -19,7 +19,7 @@ class AccessibilityNodeCacheImplTest {
 
     @BeforeEach
     fun setUp() {
-        cache = AccessibilityNodeCacheImpl()
+        cache = AccessibilityNodeCacheImpl(TreeGenerationTrackerImpl())
     }
 
     private fun mockNode(): AccessibilityNodeInfo = mockk(relaxed = true)

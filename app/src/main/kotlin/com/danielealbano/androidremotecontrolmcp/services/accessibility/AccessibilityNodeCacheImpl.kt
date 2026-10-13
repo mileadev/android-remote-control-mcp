@@ -15,6 +15,12 @@ import javax.inject.Inject
  *   NOT recycled because a concurrent [get] call may still hold a reference to a [CachedNode]
  *   from the old map. Since `AccessibilityNodeInfo.recycle()` is a no-op on API 33+ (minSdk),
  *   GC safely collects unreferenced old entries. (P2 fix)
+ *   After publishing the snapshot, the tree generation tracker is bumped so every publication
+ *   advances the monotonically increasing accessibility tree generation (H-10); dispatches
+ *   record the generation they acted on. The tracker is bumped AFTER the swap: a reader that
+ *   observes the new snapshot between swap and bump may still see the previous generation,
+ *   which is the conservative choice — it can only make a staleness check see the older
+ *   generation, never a fresher one.
  * - [get]: reads the current map (no locking).
  * - [clear]: atomically swaps to an empty map AND recycles old entries. Recycling is
  *   safe even with concurrent [get] callers because `AccessibilityNodeInfo.recycle()` is
@@ -22,12 +28,15 @@ import javax.inject.Inject
  *   ([McpAccessibilityService.onDestroy]) and after a settled window transition (soft-keyboard
  *   show/hide, rotation, activity/dialog change); an in-flight node action keeps using the
  *   reference it already resolved, so concurrency with [get] is safe regardless of timing.
+ *   Generations are never rewound on clear: tree versions only move forward.
  *
  * Hilt-injectable as a singleton.
  */
 class AccessibilityNodeCacheImpl
     @Inject
-    constructor() : AccessibilityNodeCache {
+    constructor(
+        private val treeGenerationTracker: AccessibilityTreeGenerationTracker,
+    ) : AccessibilityNodeCache {
         private val cache = AtomicReference<Map<String, CachedNode>>(emptyMap())
 
         override fun populate(entries: Map<String, CachedNode>) {
@@ -39,7 +48,12 @@ class AccessibilityNodeCacheImpl
             // as a hotspot, HashMap(entries) could be more efficient due to pre-sizing.
             val snapshot = entries.toMap()
             val old = cache.getAndSet(snapshot)
-            Log.d(TAG, "Cache populated with ${snapshot.size} entries (dropped ${old.size} old)")
+            treeGenerationTracker.bump()
+            Log.d(
+                TAG,
+                "Cache populated with ${snapshot.size} entries (dropped ${old.size} old; " +
+                    "generation ${treeGenerationTracker.current()})",
+            )
         }
 
         override fun get(nodeId: String): CachedNode? = cache.get()[nodeId]

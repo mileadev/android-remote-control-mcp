@@ -2,12 +2,14 @@ package com.danielealbano.androidremotecontrolmcp.mcp.tools
 
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerLogEntry
 import com.danielealbano.androidremotecontrolmcp.data.repository.ServerLogRepository
+import com.danielealbano.androidremotecontrolmcp.services.accessibility.UiEventDispatchMetadata
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
 private const val NANOS_PER_MILLI = 1_000_000L
@@ -50,7 +52,13 @@ internal fun loggedToolHandler(
             var completed: CallToolResult? = null
             runCatching { toolCallIndicator.onToolCallStarted(toolName) }
             try {
-                val result = handler(request)
+                // Install the H-10 dispatch metadata element (no client request id is
+                // available on the typed CallToolRequest: it lives on the JSON-RPC
+                // envelope, so the element carries generation/elapsed context only).
+                val result =
+                    withContext(UiEventDispatchMetadata()) {
+                        handler(request)
+                    }
                 completed = result
                 result
             } finally {

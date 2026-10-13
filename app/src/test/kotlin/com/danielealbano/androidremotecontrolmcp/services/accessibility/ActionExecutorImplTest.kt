@@ -28,12 +28,23 @@ class ActionExecutorImplTest {
     private lateinit var mockService: McpAccessibilityService
     private lateinit var mockCache: AccessibilityNodeCache
     private lateinit var mockTreeParser: AccessibilityTreeParser
+    private lateinit var generationTracker: TreeGenerationTrackerImpl
 
     @BeforeEach
     fun setUp() {
         mockCache = mockk<AccessibilityNodeCache>(relaxed = true)
         mockTreeParser = mockk<AccessibilityTreeParser>(relaxed = true)
-        executor = ActionExecutorImpl(mockCache, mockTreeParser)
+        generationTracker = TreeGenerationTrackerImpl()
+        executor =
+            ActionExecutorImpl(
+                mockCache,
+                mockTreeParser,
+                generationTracker,
+                UiEventBatchDispatcher(
+                    UiEventBatchQuota.forBuild(isLabHardened = false),
+                    generationTracker,
+                ),
+            )
         mockService = mockk<McpAccessibilityService>(relaxed = true)
     }
 
