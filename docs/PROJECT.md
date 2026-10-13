@@ -330,7 +330,7 @@ The MCP server exposes 57 tools across 14 categories. For full JSON-RPC schemas,
 
 **Extras type inference**: String values → `String`, integers fitting Int range → `Int`, integers exceeding Int range → `Long`, decimals → `Double`, booleans → `Boolean`, string arrays → `StringArrayList`. Use `extras_types` to override (supported: `"string"`, `"int"`, `"long"`, `"float"`, `"double"`, `"boolean"`).
 
-**Flags**: Resolved dynamically via `Intent::class.java.fields` reflection. `FLAG_ACTIVITY_NEW_TASK` auto-added for `type = "activity"`.
+**Flags**: Resolved through the typed `IntentFlagCatalog` in `services/adapters` — compile-time `Intent` constants (no runtime introspection); each flag is version-gated and refused with a typed `InvalidParams` error when the device API level predates it. `FLAG_ACTIVITY_NEW_TASK` auto-added for `type = "activity"`.
 
 **Errors**: Invalid type/component/flag → `McpToolException.InvalidParams`. No handler found / permission denied / background start restriction → `McpToolException.ActionFailed` with sanitized message.
 

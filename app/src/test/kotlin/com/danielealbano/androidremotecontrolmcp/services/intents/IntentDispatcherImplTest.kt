@@ -6,6 +6,9 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.services.adapters.FrameworkAdapterRegistry
+import com.danielealbano.androidremotecontrolmcp.services.adapters.IntentFrameworkAdapter
+import com.danielealbano.androidremotecontrolmcp.services.adapters.PlatformVersionProvider
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.impl.annotations.MockK
@@ -70,7 +73,16 @@ class IntentDispatcherImplTest {
         every { mockContext.sendBroadcast(any()) } just Runs
         every { mockContext.startService(any()) } returns mockk()
 
-        dispatcher = IntentDispatcherImpl(mockContext)
+        every { mockContext.checkSelfPermission(any()) } returns
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        val platformVersion =
+            object : PlatformVersionProvider {
+                override val currentApiLevel: Int get() = 34
+            }
+        val adapter = IntentFrameworkAdapter(mockContext, platformVersion)
+        val registry = FrameworkAdapterRegistry(listOf(adapter), platformVersion, mockContext)
+        dispatcher = IntentDispatcherImpl(mockContext, registry)
     }
 
     @AfterEach
