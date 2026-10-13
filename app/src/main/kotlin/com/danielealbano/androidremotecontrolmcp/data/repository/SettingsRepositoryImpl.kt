@@ -2,6 +2,7 @@ package com.danielealbano.androidremotecontrolmcp.data.repository
 
 import android.util.Log
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -9,6 +10,9 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.data.crypto.SecretCipher
+import com.danielealbano.androidremotecontrolmcp.data.crypto.SecretCipherException
+import com.danielealbano.androidremotecontrolmcp.data.crypto.isSecretEnvelope
 import com.danielealbano.androidremotecontrolmcp.data.model.AvailableUpdate
 import com.danielealbano.androidremotecontrolmcp.data.model.BindingAddress
 import com.danielealbano.androidremotecontrolmcp.data.model.BuiltinPermissions
@@ -31,7 +35,6 @@ import javax.inject.Inject
 // Preferences keys and shared constants for SettingsRepositoryImpl (file-private; referenced unqualified).
 private const val TAG = "MCP:SettingsRepo"
 private const val MAX_LOC_ID_LEN = 200
-private const val JWT_SECRET_BYTES = 32
 private val CONTROL_CHAR_REGEX = Regex("[\\p{Cntrl}]")
 
 private fun sanitizeLocationId(locationId: String) = locationId.take(MAX_LOC_ID_LEN).replace(CONTROL_CHAR_REGEX, "")
@@ -104,12 +107,28 @@ private val toolPermissionsPolicyMode: ToolPermissionsConfig.PolicyMode =
         ToolPermissionsConfig.PolicyMode.PERMISSIVE_DEFAULT
     }
 
+/** Secret keys whose plaintext values are migrated to at-rest envelopes. */
+private val AT_REST_SECRET_KEYS = listOf(BEARER_TOKEN_KEY, JWT_SIGNING_SECRET_KEY)
+
+/** Tunnel provider secrets, stripped on hardened builds. */
+private val AT_REST_TUNNEL_SECRET_KEYS =
+    listOf(NGROK_AUTHTOKEN_KEY, CLOUDFLARE_TUNNEL_TOKEN_KEY)
+
 /**
  * Maps raw [Preferences] to a [ServerConfig] instance, applying defaults
  * for any missing keys.
+ *
+ * Secret values are read through [readStoredSecret] so envelopes decrypt to
+ * their original plaintext (and integrity failures read as empty). Tunnel
+ * credentials always read as empty on hardened builds, where the tunnel
+ * feature is stripped and those secrets are never persistable.
  */
 @Suppress("CyclomaticComplexMethod")
-private fun mapPreferencesToServerConfig(prefs: Preferences): ServerConfig {
+private fun mapPreferencesToServerConfig(
+    prefs: Preferences,
+    secretCipher: SecretCipher,
+    refuseTunnelCredentials: Boolean,
+): ServerConfig {
     val bindingAddressName = prefs[BINDING_ADDRESS_KEY] ?: BindingAddress.LOCALHOST.name
     val certificateSourceName = prefs[CERTIFICATE_SOURCE_KEY] ?: CertificateSource.AUTO_GENERATED.name
 
@@ -122,7 +141,7 @@ private fun mapPreferencesToServerConfig(prefs: Preferences): ServerConfig {
         bindingAddress =
             BindingAddress.entries.firstOrNull { it.name == bindingAddressName }
                 ?: BindingAddress.LOCALHOST,
-        bearerToken = prefs[BEARER_TOKEN_KEY] ?: "",
+        bearerToken = readStoredSecret(prefs, BEARER_TOKEN_KEY, secretCipher),
         autoStartOnBoot = prefs[AUTO_START_KEY] ?: false,
         toolCallIndicatorEnabled = prefs[TOOL_CALL_INDICATOR_ENABLED_KEY] ?: true,
         httpsEnabled = prefs[HTTPS_ENABLED_KEY] ?: false,
@@ -136,12 +155,22 @@ private fun mapPreferencesToServerConfig(prefs: Preferences): ServerConfig {
         tunnelProvider =
             TunnelProviderType.entries.firstOrNull { it.name == tunnelProviderName }
                 ?: TunnelProviderType.CLOUDFLARE,
-        ngrokAuthtoken = prefs[NGROK_AUTHTOKEN_KEY] ?: "",
+        ngrokAuthtoken =
+            if (refuseTunnelCredentials) {
+                ""
+            } else {
+                readStoredSecret(prefs, NGROK_AUTHTOKEN_KEY, secretCipher)
+            },
         ngrokDomain = prefs[NGROK_DOMAIN_KEY] ?: "",
         cloudflareTunnelMode =
             CloudflareTunnelMode.entries.firstOrNull { it.name == cloudflareTunnelModeName }
                 ?: CloudflareTunnelMode.FREE,
-        cloudflareTunnelToken = prefs[CLOUDFLARE_TUNNEL_TOKEN_KEY] ?: "",
+        cloudflareTunnelToken =
+            if (refuseTunnelCredentials) {
+                ""
+            } else {
+                readStoredSecret(prefs, CLOUDFLARE_TUNNEL_TOKEN_KEY, secretCipher)
+            },
         cloudflareTunnelExtraArgs = prefs[CLOUDFLARE_TUNNEL_EXTRA_ARGS_KEY] ?: "",
         fileSizeLimitMb = prefs[FILE_SIZE_LIMIT_KEY] ?: ServerConfig.DEFAULT_FILE_SIZE_LIMIT_MB,
         allowHttpDownloads = prefs[ALLOW_HTTP_DOWNLOADS_KEY] ?: false,
@@ -302,6 +331,8 @@ private fun logPrivacyModeDiff(
  * application. No other class should access DataStore directly.
  *
  * @property dataStore The Preferences DataStore instance provided by Hilt.
+ * @property secretCipher At-rest cipher for secret preferences (Keystore
+ *   AES-GCM on hardened builds; pass-through elsewhere).
  */
 @Suppress("TooManyFunctions")
 class SettingsRepositoryImpl
@@ -310,16 +341,27 @@ class SettingsRepositoryImpl
         private val dataStore: DataStore<Preferences>,
         private val settingsChangeLogger: SettingsChangeLogger,
         eventChannelSettings: EventChannelSettings,
+        private val secretCipher: SecretCipher,
     ) : SettingsRepository,
         EventChannelSettings by eventChannelSettings {
+        /**
+         * True when this flavor must not persist tunnel credentials at all:
+         * the lab-hardened image strips the tunnel feature, so there is no
+         * legitimate consumer for those secrets. Other flavors keep upstream
+         * behavior.
+         */
+        private val refuseTunnelCredentials: Boolean = BuildConfig.LAB_HARDENED
+
+        private val secretsAtRest = SecretPersistenceContext(dataStore, settingsChangeLogger, secretCipher)
+
         override val serverConfig: Flow<ServerConfig> =
             dataStore.data.map { prefs ->
-                mapPreferencesToServerConfig(prefs)
+                mapPreferencesToServerConfig(prefs, secretCipher, refuseTunnelCredentials)
             }
 
         override suspend fun getServerConfig(): ServerConfig {
             ensureAuthModelMigrated()
-            return mapPreferencesToServerConfig(dataStore.data.first())
+            return mapPreferencesToServerConfig(dataStore.data.first(), secretCipher, refuseTunnelCredentials)
         }
 
         override suspend fun ensureAuthModelMigrated() {
@@ -334,10 +376,13 @@ class SettingsRepositoryImpl
                 // Bearer-token auto-generation: only when bearer is enabled and empty.
                 if (prefs[BEARER_TOKEN_INITIALIZED_KEY] != true) {
                     if (prefs[BEARER_TOKEN_ENABLED_KEY] == true && prefs[BEARER_TOKEN_KEY].isNullOrEmpty()) {
-                        prefs[BEARER_TOKEN_KEY] = generateTokenString()
+                        persistSecretString(prefs, BEARER_TOKEN_KEY, generateTokenString(), secretCipher)
                     }
                     prefs[BEARER_TOKEN_INITIALIZED_KEY] = true
                 }
+                // One-at-most plaintext → envelope migration for secret keys,
+                // committed (or fully aborted) with the surrounding edit.
+                migrateSecretsAtRest(prefs, secretsAtRest, AT_REST_SECRET_KEYS, AT_REST_TUNNEL_SECRET_KEYS)
             }
         }
 
@@ -384,7 +429,7 @@ class SettingsRepositoryImpl
                 logToggle("bearer_token_enabled", old, enabled, "Bearer token auth")
                 if (enabled && prefs[BEARER_TOKEN_KEY].isNullOrEmpty()) {
                     val generated = generateTokenString()
-                    prefs[BEARER_TOKEN_KEY] = generated
+                    persistSecretString(prefs, BEARER_TOKEN_KEY, generated, secretCipher)
                     settingsChangeLogger.submit("bearer_token", "", generated) { _, _ -> "Bearer token changed" }
                 }
             }
@@ -413,24 +458,37 @@ class SettingsRepositoryImpl
             }
         }
 
-        override suspend fun getOrCreateJwtSigningSecret(): String {
+        /**
+         * Returns the JWT signing secret, generating and persisting a random one on
+         * first use.
+         *
+         * Security invariants: an envelope that fails integrity verification throws
+         * [SecretCipherException] instead of regenerating — silent regeneration would
+         * invalidate every already-issued token, so a corrupt store fails loudly and
+         * the stored value is never reset. A legacy plaintext secret is migrated into
+         * an authenticated envelope inside a DataStore edit that commits only when the
+         * whole transform succeeds. Secrets are never logged on any path here.
+         */
+        override suspend fun getOrCreateJwtSigningSecret(): String =
             dataStore.data
                 .first()[JWT_SIGNING_SECRET_KEY]
                 ?.takeIf { it.isNotEmpty() }
-                ?.let { return it }
-            dataStore.edit { prefs ->
-                if (prefs[JWT_SIGNING_SECRET_KEY].isNullOrEmpty()) {
-                    val raw = ByteArray(JWT_SECRET_BYTES).also { java.security.SecureRandom().nextBytes(it) }
-                    prefs[JWT_SIGNING_SECRET_KEY] =
-                        java.util.Base64
-                            .getUrlEncoder()
-                            .withoutPadding()
-                            .encodeToString(raw)
+                ?.let { stored ->
+                    when {
+                        isSecretEnvelope(stored) -> {
+                            secretCipher.decrypt(stored)
+                        }
+
+                        secretCipher.encryptsAtRest -> {
+                            migrateLegacyPlaintextSecret(dataStore, JWT_SIGNING_SECRET_KEY, secretCipher, stored)
+                        }
+
+                        else -> {
+                            stored
+                        }
+                    }
                 }
-            }
-            // read-AFTER-edit: key is guaranteed present, so !! is always safe
-            return dataStore.data.first()[JWT_SIGNING_SECRET_KEY]!!
-        }
+                ?: createAndPersistJwtSigningSecret(secretsAtRest, JWT_SIGNING_SECRET_KEY)
 
         override suspend fun updatePort(port: Int) =
             logScalarChange(PORT_KEY, "port", port, ServerConfig.DEFAULT_PORT) { o, n -> "Port changed $o → $n" }
@@ -446,7 +504,7 @@ class SettingsRepositoryImpl
             }
 
         override suspend fun updateBearerToken(token: String) =
-            logScalarChange(BEARER_TOKEN_KEY, "bearer_token", token, "") { _, _ -> "Bearer token changed" }
+            persistSecretScalar(secretsAtRest, BEARER_TOKEN_KEY, "bearer_token", token, "Bearer token changed")
 
         override suspend fun generateNewBearerToken(): String {
             val token = generateTokenString()
@@ -532,7 +590,14 @@ class SettingsRepositoryImpl
             }
 
         override suspend fun updateNgrokAuthtoken(authtoken: String) =
-            logScalarChange(NGROK_AUTHTOKEN_KEY, "ngrok_authtoken", authtoken, "") { _, _ -> "ngrok authtoken changed" }
+            persistTunnelCredential(
+                secretsAtRest,
+                NGROK_AUTHTOKEN_KEY,
+                "ngrok_authtoken",
+                authtoken,
+                "ngrok authtoken not persisted: tunnel secrets are not persistable on this build",
+                "ngrok authtoken changed",
+            )
 
         override suspend fun updateNgrokDomain(domain: String) =
             logScalarChange(NGROK_DOMAIN_KEY, "ngrok_domain", domain, "") { o, n -> "ngrok domain changed $o → $n" }
@@ -548,9 +613,14 @@ class SettingsRepositoryImpl
             }
 
         override suspend fun updateCloudflareTunnelToken(token: String) =
-            logScalarChange(CLOUDFLARE_TUNNEL_TOKEN_KEY, "cloudflare_tunnel_token", token, "") { _, _ ->
-                "Cloudflare tunnel token changed"
-            }
+            persistTunnelCredential(
+                secretsAtRest,
+                CLOUDFLARE_TUNNEL_TOKEN_KEY,
+                "cloudflare_tunnel_token",
+                token,
+                "Cloudflare tunnel token not persisted: tunnel secrets are not persistable on this build",
+                "Cloudflare tunnel token changed",
+            )
 
         override suspend fun updateCloudflareTunnelExtraArgs(extraArgs: String) =
             logScalarChange(
