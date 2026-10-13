@@ -220,6 +220,23 @@ class CapabilityCatalogSchemaTest {
                     )
                 }
         }
+
+        // The same reverse check for the param-level gate: `save_camera_video` records audio by
+        // default (`optionalBoolean(arguments, "audio", true)`), so a tool that starts declaring
+        // RECORD_AUDIO without an entry in PARAMS_BY_PERMISSION would record it ungated.
+        val microphoneGatedTools =
+            OptionalToolPermissions.PARAMS_BY_PERMISSION
+                .getValue(OptionalToolPermission.MICROPHONE)
+                .keys
+        catalog.toolNames
+            .map { catalog.forTool(it)!! }
+            .filter { "android.permission.RECORD_AUDIO" in it.requiredPermissions }
+            .forEach { entry ->
+                assertTrue(
+                    microphoneGatedTools.contains(entry.toolName),
+                    "${entry.toolName} requires RECORD_AUDIO but has no microphone-gated parameter",
+                )
+            }
     }
 
     @Test
