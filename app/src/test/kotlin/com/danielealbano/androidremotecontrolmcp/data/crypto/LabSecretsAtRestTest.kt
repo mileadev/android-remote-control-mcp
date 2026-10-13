@@ -199,14 +199,31 @@ class LabSecretsAtRestTest {
         fun `a corrupt envelope reads as empty and leaves the stored value intact`() =
             testScope.runTest {
                 val intact = secretCipher.encrypt("secret-bearer-value-1")
-                dataStore.edit { prefs -> prefs[BEARER_KEY] = tamperEnvelope(intact) }
+                dataStore.edit { prefs -> prefs[BEARER_KEY] = tamperSecretEnvelope(intact) }
 
                 assertEquals("", repository.getServerConfig().bearerToken)
 
-                assertEquals(tamperEnvelope(intact), raw(BEARER_KEY), "integrity failures must not clear the store")
+                assertEquals(
+                    tamperSecretEnvelope(intact),
+                    raw(BEARER_KEY),
+                    "integrity failures must not clear the store",
+                )
                 assertIntegrityRefusalWasLogged()
                 flushChangeLogger()
                 assertLogsCarryNoSecretValues("secret-bearer-value-1", intact)
+            }
+
+        @Test
+        fun `a body shorter than the authentication tag reads as empty and is not cleared`() =
+            testScope.runTest {
+                val intact = secretCipher.encrypt("secret-bearer-value-1")
+                val truncated = truncateSecretEnvelope(intact)
+                dataStore.edit { prefs -> prefs[BEARER_KEY] = truncated }
+
+                assertEquals("", repository.getServerConfig().bearerToken)
+
+                assertEquals(truncated, raw(BEARER_KEY), "integrity failures must not clear the store")
+                assertIntegrityRefusalWasLogged()
             }
 
         @Test
@@ -271,13 +288,5 @@ class LabSecretsAtRestTest {
         val JWT_KEY = stringPreferencesKey("jwt_signing_secret")
         val NGROK_KEY = stringPreferencesKey("ngrok_authtoken")
         val CLOUDFLARE_KEY = stringPreferencesKey("cloudflare_tunnel_token")
-
-        /** Flips the final ciphertext character so the GCM tag check fails. */
-        fun tamperEnvelope(envelope: String): String {
-            val parts = envelope.split(SECRET_ENVELOPE_SEPARATOR)
-            val ciphertext = parts[2]
-            val replacement = if (ciphertext.endsWith("A")) "B" else "A"
-            return SECRET_ENVELOPE_PREFIX + parts[1] + SECRET_ENVELOPE_SEPARATOR + ciphertext.dropLast(1) + replacement
-        }
     }
 }

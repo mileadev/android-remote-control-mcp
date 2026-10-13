@@ -1,6 +1,7 @@
 package com.danielealbano.androidremotecontrolmcp.data.crypto
 
 import java.security.GeneralSecurityException
+import java.security.ProviderException
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -71,6 +72,10 @@ class FakeSecretCipher : SecretCipher {
         return try {
             cipher.doFinal(ciphertext).toString(Charsets.UTF_8)
         } catch (e: GeneralSecurityException) {
+            failAuthentication(e)
+        } catch (e: ProviderException) {
+            // A body shorter than the GCM tag surfaces as a runtime
+            // ProviderException on JDK 17, not as a GeneralSecurityException.
             failAuthentication(e)
         }
     }

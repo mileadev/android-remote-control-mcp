@@ -48,6 +48,14 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 - Corrupt store / process-restart / credential-rotation covered by `SecretsMigrationTest` + `LabSecretsAtRestTest` (incl. corrupted-store never defaults to OPEN — asserted with H-02 gate).
 
 
+## Follow-up hardening (post-merge, CI JDK 17)
+
+- CI runs Temurin 17 while this host defaults to JDK 21. On JDK 17 SunJCE, a GCM body **shorter than the 16-byte tag** (truncated or partly overwritten preference) is reported as `java.security.ProviderException`(wrapping `ShortBufferException`) instead of `AEADBadTagException`. `ProviderException` extends `RuntimeException`, not `GeneralSecurityException`, so it escaped `KeystoreSecretCipher.decrypt` and `FakeSecretCipher.decrypt`, reached `SecretsAtRest.readStoredSecret` (which catches only `SecretCipherException`), and crashed a settings read instead of refusing the value — a real violation of the fail-closed invariant above. Both `decrypt` implementations now catch `ProviderException` and fail closed.
+- Two test helpers tampered the **IV** instead of the ciphertext (`"enc.v1.<iv>.<ct>".split('.')` yields 4 parts, so index `[2]` is the IV) and discarded the real ciphertext, so the "tampered envelope" tests never exercised a tampered ciphertext. Replaced by shared `SecretEnvelopeFixtures` helpers; the tamper now flips the **first** ciphertext character, because flipping the last one is a no-op whenever the unpadded base64 length is `mod 4 == 2` (e.g. the 37-byte `secret-bearer-value-1` ciphertext).
+- Regression tests added: `KeystoreSecretCipherTest."a body shorter than the authentication tag fails integrity verification"` and `LabSecretsAtRestTest."a body shorter than the authentication tag reads as empty and is not cleared"`. Both fail on JDK 17 without the catch (verified by temporary removal) and pass on JDK 21 either way, which is why the pre-existing gates missed this.
+- `encrypt` had the same asymmetry (`IOException` from `KeyStore.load` and provider-level `ProviderException` both escaped, despite the interface promising `SecretCipherException` "if the backing key is unavailable"); it now catches both. These two clauses are not reachable from a JVM unit test because `AndroidKeyStore` is absent there (`KeyStoreException` fires first); they are asserted only by inspection.
+
+
 ## Risks and follow-ups
 
 - No P0 residual risk identified in lab scope; residual exposure is limited to the documented environment gates (above) and per-item residuals (see invariants).

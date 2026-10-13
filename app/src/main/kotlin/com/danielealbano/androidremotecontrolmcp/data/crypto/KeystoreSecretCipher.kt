@@ -6,6 +6,7 @@ import android.util.Log
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.security.ProviderException
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -41,6 +42,13 @@ class KeystoreSecretCipher : SecretCipher {
             SECRET_ENVELOPE_PREFIX + encode(iv) + SECRET_ENVELOPE_SEPARATOR + encode(ciphertext)
         } catch (e: GeneralSecurityException) {
             throw SecretCipherException("Secret encryption failed: keystore key unavailable", e)
+        } catch (e: ProviderException) {
+            // Android's keystore provider reports a bad key state (and failing
+            // loads) as a runtime ProviderException; never let it escape, so
+            // callers see the documented failure either way.
+            throw SecretCipherException("Secret encryption failed: keystore key unavailable", e)
+        } catch (e: IOException) {
+            throw SecretCipherException("Secret encryption failed: keystore key unavailable", e)
         }
 
     override fun decrypt(envelope: String): String {
@@ -58,6 +66,12 @@ class KeystoreSecretCipher : SecretCipher {
             cipher.init(Cipher.DECRYPT_MODE, obtainKey(), GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
         } catch (e: GeneralSecurityException) {
+            fail("Stored secret failed integrity verification", e)
+        } catch (e: ProviderException) {
+            // Provider-level failures are runtime exceptions, not
+            // GeneralSecurityException: JDK 17's SunJCE reports a body shorter
+            // than the GCM tag this way, and AndroidKeyStore's own SPIs report
+            // key and StrongBox failures this way.
             fail("Stored secret failed integrity verification", e)
         } catch (e: IOException) {
             fail("Stored secret keystore is unavailable", e)

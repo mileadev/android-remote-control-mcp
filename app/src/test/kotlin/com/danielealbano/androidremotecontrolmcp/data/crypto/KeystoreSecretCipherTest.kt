@@ -97,15 +97,14 @@ class KeystoreSecretCipherTest {
 
         @Test
         fun `a tampered envelope fails integrity verification`() {
-            val original = fake.encrypt("secret-value-1")
-            val iv = original.split(SECRET_ENVELOPE_SEPARATOR)[1]
-            val ciphertext = original.split(SECRET_ENVELOPE_SEPARATOR)[2]
-            val tampered =
-                SECRET_ENVELOPE_PREFIX +
-                    iv +
-                    SECRET_ENVELOPE_SEPARATOR +
-                    (if (ciphertext.endsWith("A")) ciphertext.dropLast(1) + "B" else ciphertext.dropLast(1) + "A")
+            val tampered = tamperSecretEnvelope(fake.encrypt("secret-value-1"))
             assertThrows(SecretCipherException::class.java) { fake.decrypt(tampered) }
+        }
+
+        @Test
+        fun `a body shorter than the authentication tag fails integrity verification`() {
+            val truncated = truncateSecretEnvelope(fake.encrypt("secret-value-1"))
+            assertThrows(SecretCipherException::class.java) { fake.decrypt(truncated) }
         }
 
         @Test
