@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -215,7 +216,8 @@ class NotificationToolsTest {
 
                 val result = handler.execute(buildJsonObject { put("notification_id", "aabbcc01") })
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification opened", text)
+                assertTrue(text.startsWith("Notification opened"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test
@@ -291,7 +293,8 @@ class NotificationToolsTest {
 
                 val result = handler.execute(buildJsonObject { put("notification_id", "aabbcc01") })
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification dismissed", text)
+                assertTrue(text.startsWith("Notification dismissed"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test
@@ -385,7 +388,8 @@ class NotificationToolsTest {
                     }
                 val result = handler.execute(args)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification snoozed for 60000ms", text)
+                assertTrue(text.startsWith("Notification snoozed for 60000ms"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test
@@ -521,7 +525,8 @@ class NotificationToolsTest {
                         },
                     )
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification snoozed for 604800000ms", text)
+                assertTrue(text.startsWith("Notification snoozed for 604800000ms"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test
@@ -561,7 +566,8 @@ class NotificationToolsTest {
 
                 val result = handler.execute(buildJsonObject { put("action_id", "11223344") })
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification action executed", text)
+                assertTrue(text.startsWith("Notification action executed"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test
@@ -655,7 +661,8 @@ class NotificationToolsTest {
                     }
                 val result = handler.execute(args)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Reply sent", text)
+                assertTrue(text.startsWith("Reply sent"))
+                assertTrue(text.contains("outcome=completed"))
             }
 
         @Test

@@ -159,7 +159,8 @@ class NotificationToolsIntegrationTest {
                     )
                 assertNotEquals(true, result.isError)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification opened", text)
+                assertTrue(text.startsWith("Notification opened"))
+                assertTrue(text.contains("outcome=completed"))
             }
         }
 
@@ -240,7 +241,8 @@ class NotificationToolsIntegrationTest {
                     )
                 assertNotEquals(true, result.isError)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification dismissed", text)
+                assertTrue(text.startsWith("Notification dismissed"))
+                assertTrue(text.contains("outcome=completed"))
             }
         }
 
@@ -347,7 +349,8 @@ class NotificationToolsIntegrationTest {
                     )
                 assertNotEquals(true, result.isError)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Notification action executed", text)
+                assertTrue(text.startsWith("Notification action executed"))
+                assertTrue(text.contains("outcome=completed"))
             }
         }
 
@@ -393,7 +396,8 @@ class NotificationToolsIntegrationTest {
                     )
                 assertNotEquals(true, result.isError)
                 val text = (result.content[0] as TextContent).text
-                assertEquals("Reply sent", text)
+                assertTrue(text.startsWith("Reply sent"))
+                assertTrue(text.contains("outcome=completed"))
             }
         }
 

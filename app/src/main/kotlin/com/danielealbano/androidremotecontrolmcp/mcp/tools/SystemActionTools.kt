@@ -14,10 +14,13 @@ import kotlinx.serialization.json.buildJsonObject
 import javax.inject.Inject
 
 /**
- * Executes a system action via [ActionExecutor], with standard error handling.
+ * Executes a system action via [ActionExecutor] with H-10 outcome semantics.
  *
- * Checks accessibility service availability, executes the action, and returns
- * a text content response on success. Throws [McpToolException] on failure.
+ * Checks accessibility service availability, executes the action as a bounded,
+ * generation-aware dispatch, and returns a text content response with explicit outcome
+ * (`completed` / `unknown_outcome`) metadata on success. Failures throw
+ * [McpToolException]; deadline expiry and framework cancellation surface as
+ * `unknown_outcome` (never failed) per the control-plane contract.
  *
  * @param actionName Human-readable name of the action (for error/success messages).
  * @param action Suspend function that performs the system action and returns [Result].
@@ -34,14 +37,7 @@ private suspend fun executeSystemAction(
         )
     }
 
-    val result = action()
-    result.onFailure { exception ->
-        throw McpToolException.ActionFailed(
-            "$actionName failed: ${exception.message ?: "Unknown error"}",
-        )
-    }
-
-    return McpToolUtils.textResult("$actionName executed successfully")
+    return McpToolUtils.handleActionResult(result = action(), successMessage = "$actionName executed successfully")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -8,8 +8,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 
 /**
@@ -37,6 +37,8 @@ class ActionExecutorImpl
     constructor(
         private val nodeCache: AccessibilityNodeCache,
         private val treeParser: AccessibilityTreeParser,
+        private val treeGenerationTracker: AccessibilityTreeGenerationTracker,
+        private val uiEventBatchDispatcher: UiEventBatchDispatcher,
     ) : ActionExecutor {
         // ─────────────────────────────────────────────────────────────────────────
         // Node Actions
@@ -654,6 +656,31 @@ class ActionExecutorImpl
         // (findAccessibilityNodeByNodeId) mitigates this: it matches parsed tree structure against
         // the live tree, so even if a window ID were reused by a different window, the tree
         // structure mismatch would cause "not found" rather than acting on the wrong node.
+
+        /**
+         * Runs a node action as a single bounded, generation-aware dispatch and records
+         * dispatch metadata. The quota's default per-dispatch deadline applies: if it
+         * expires during resolution/execution the result is [UiEventOutcome.UNKNOWN_OUTCOME]
+         * because the action may still take effect afterwards.
+         */
+        private suspend fun performNodeAction(
+            nodeId: String,
+            windows: List<WindowData>,
+            actionName: String,
+            action: (AccessibilityNodeInfo) -> Result<Unit>,
+        ): Result<Unit> {
+            val result =
+                uiEventBatchDispatcher.dispatchSingle(
+                    UiEventOperation(
+                        operationId = "node-action:$nodeId",
+                    ) {
+                        performNodeActionInner(nodeId, windows, actionName, action)
+                    },
+                )
+            recordDispatchMetadata(result)
+            return toExecutorResult(result, "Node action $actionName failed on node '$nodeId'")
+        }
+
         @Suppress(
             "ReturnCount",
             "LongMethod",
@@ -661,7 +688,7 @@ class ActionExecutorImpl
             "NestedBlockDepth",
             "LoopWithTooManyJumpStatements",
         )
-        private suspend fun performNodeAction(
+        private suspend fun performNodeActionInner(
             nodeId: String,
             windows: List<WindowData>,
             actionName: String,
@@ -830,7 +857,24 @@ class ActionExecutorImpl
             )
         }
 
-        private fun performGlobalAction(
+        /**
+         * Records the synchronous global action as a bounded single dispatch with metadata.
+         */
+        private suspend fun performGlobalAction(
+            action: Int,
+            actionName: String,
+        ): Result<Unit> {
+            val result =
+                uiEventBatchDispatcher.dispatchSingle(
+                    UiEventOperation(operationId = "global-action:$actionName") {
+                        performGlobalActionInner(action, actionName)
+                    },
+                )
+            recordDispatchMetadata(result)
+            return toExecutorResult(result, "Global action '$actionName' failed")
+        }
+
+        private fun performGlobalActionInner(
             action: Int,
             actionName: String,
         ): Result<Unit> {
@@ -869,52 +913,123 @@ class ActionExecutorImpl
             return dispatchGesture(service, gesture, description)
         }
 
+        /**
+         * Dispatches an asynchronous gesture through the bounded dispatch pipeline with the
+         * gesture deadline. The pipeline owns per-dispatch timeout handling:
+         * - deadline expiry → [UiEventOutcome.UNKNOWN_OUTCOME] (the gesture may still
+         *   complete in the real system; it is NOT reported as failed and never replayed),
+         * - framework-reported cancellation → [UiEventOutcome.UNKNOWN_OUTCOME],
+         * - rejected dispatch → known [UiEventOutcome.FAILED].
+         */
         private suspend fun dispatchGesture(
             service: McpAccessibilityService,
             gesture: GestureDescription,
             description: String,
-        ): Result<Unit> =
-            withTimeoutOrNull(GESTURE_TIMEOUT_MS) {
-                suspendCancellableCoroutine { continuation ->
-                    val callback =
-                        object :
-                            android.accessibilityservice.AccessibilityService.GestureResultCallback() {
-                            override fun onCompleted(gestureDescription: GestureDescription?) {
-                                Log.d(TAG, "Gesture completed: $description")
-                                if (continuation.isActive) {
-                                    continuation.resume(Result.success(Unit))
-                                }
-                            }
+        ): Result<Unit> {
+            val result =
+                uiEventBatchDispatcher.dispatchSingle(
+                    UiEventOperation(operationId = "gesture:$description") {
+                        dispatchGestureAction(service, gesture, description)
+                    },
+                    requestedDeadlineMs = GESTURE_TIMEOUT_MS,
+                )
+            recordDispatchMetadata(result)
+            return toExecutorResult(result, "Gesture dispatch failed: $description")
+        }
 
-                            override fun onCancelled(gestureDescription: GestureDescription?) {
-                                Log.w(TAG, "Gesture cancelled: $description")
-                                if (continuation.isActive) {
-                                    continuation.resume(
-                                        Result.failure(
-                                            RuntimeException("Gesture cancelled: $description"),
-                                        ),
-                                    )
-                                }
+        /**
+         * Registers the gesture and resumes when the framework reports completion or
+         * cancellation. Cancellation of the enclosing coroutine (deadline expiry) does not
+         * cancel the gesture: the gesture may still complete later in the real system,
+         * which is exactly why expiry must yield an unknown outcome rather than failure.
+         */
+        private suspend fun dispatchGestureAction(
+            service: McpAccessibilityService,
+            gesture: GestureDescription,
+            description: String,
+        ): Result<Unit> =
+            suspendCancellableCoroutine { continuation ->
+                val callback =
+                    object :
+                        android.accessibilityservice.AccessibilityService.GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            Log.d(TAG, "Gesture completed: $description")
+                            if (continuation.isActive) {
+                                continuation.resume(Result.success(Unit))
                             }
                         }
 
-                    val dispatched = service.dispatchGesture(gesture, callback, null)
-                    if (!dispatched) {
-                        Log.e(TAG, "Failed to dispatch gesture: $description")
-                        if (continuation.isActive) {
-                            continuation.resume(
-                                Result.failure(
-                                    RuntimeException("Failed to dispatch gesture: $description"),
-                                ),
-                            )
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            Log.w(TAG, "Gesture cancelled: $description")
+                            if (continuation.isActive) {
+                                // The framework may have partially delivered the gesture;
+                                // the final effect cannot be determined → unknown outcome.
+                                continuation.resume(
+                                    Result.failure(
+                                        UiEventUnknownOutcomeException(
+                                            "Gesture cancelled: $description",
+                                        ),
+                                    ),
+                                )
+                            }
                         }
                     }
+
+                val dispatched = service.dispatchGesture(gesture, callback, null)
+                if (!dispatched) {
+                    Log.e(TAG, "Failed to dispatch gesture: $description")
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            Result.failure(
+                                RuntimeException("Failed to dispatch gesture: $description"),
+                            ),
+                        )
+                    }
                 }
-            } ?: run {
-                Log.e(TAG, "Gesture timed out after ${GESTURE_TIMEOUT_MS}ms: $description")
-                Result.failure(
-                    RuntimeException("Gesture timed out after ${GESTURE_TIMEOUT_MS}ms: $description"),
-                )
+            }
+
+        /**
+         * Records dispatch metadata into the enclosing tool invocation's
+         * [UiEventDispatchMetadata] element so result builders can reference the tree
+         * generation the dispatch acted on. Absent element (non-tool contexts) is a no-op.
+         */
+        private suspend fun recordDispatchMetadata(result: UiEventResult) {
+            coroutineContext[UiEventDispatchMetadata]?.record(result)
+        }
+
+        /**
+         * Maps a typed dispatch result back onto the legacy [Result]-based executor
+         * interface.
+         *
+         * - COMPLETED → success.
+         * - UNKNOWN_OUTCOME → failure carrying [UiEventUnknownOutcomeException]; callers
+         *   must not treat this as a failure or replay the dispatch.
+         * - FAILED → failure with the known error (kept verbatim for diagnostics).
+         */
+        private fun toExecutorResult(
+            result: UiEventResult,
+            fallbackDetail: String,
+        ): Result<Unit> =
+            when (result.outcome) {
+                UiEventOutcome.COMPLETED -> {
+                    Result.success(Unit)
+                }
+
+                UiEventOutcome.UNKNOWN_OUTCOME -> {
+                    Result.failure(
+                        UiEventUnknownOutcomeException(
+                            result.detail ?: fallbackDetail,
+                            result.treeGeneration,
+                            result.elapsedMs,
+                        ),
+                    )
+                }
+
+                UiEventOutcome.FAILED -> {
+                    Result.failure(
+                        result.error ?: RuntimeException(result.detail ?: fallbackDetail),
+                    )
+                }
             }
 
         /**
