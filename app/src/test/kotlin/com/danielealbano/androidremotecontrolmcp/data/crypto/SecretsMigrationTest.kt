@@ -363,7 +363,10 @@ class SecretsMigrationTest {
 
                 // The application starts the migration on its own IO coroutine and a settings
                 // screen starts the same work; only the first of them may spend the launch's
-                // attempt, so they are released together on real threads.
+                // attempt, so they are released together on real threads. This detects a revert
+                // of the atomic claim with high probability rather than by construction: a
+                // non-atomic field would have to be caught inside its read-to-write window,
+                // which sixteen simultaneous callers do reliably in practice, not provably.
                 val start = CyclicBarrier(CONCURRENT_CALLERS)
                 val attempts =
                     (1..CONCURRENT_CALLERS)

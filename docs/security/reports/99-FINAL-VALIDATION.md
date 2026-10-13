@@ -5,6 +5,14 @@ Current HEAD / branch: `hardening/android-lab` @ `1e1a25c` (validated HEAD = mer
 Workspace state: clean (report set committed; vendor/ngrok-java and __pycache__ gitignored artifacts only)
 Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SDK android-37.2-beta3, Gradle 9.7.1 wrapper SHA-pinned, AGP 9.3.2, Kotlin 2.4.10); no device hardware attached; no push performed; no installs outside project/Gradle caches; no root required.
 
+> **Audit follow-up (same day).** A whole-repo audit of this branch produced 20 findings; the fixes
+> for the non-deferred ones are recorded in the per-item reports below. The five findings this report
+> then recorded as *deferred* because they resolved to product/crypto/scope decisions — 8, 9, 12, 18,
+> 19 — are all implemented as well; see "Audit findings deferred in this phase, then resolved" at the
+> end of this document. V07 and the known-residuals line below were corrected for finding 19 (the
+> deleted TLS/download surface). This report's header block still describes the pre-audit validation
+> phase and is left as written.
+
 
 ## Reproduced baseline evidence
 
@@ -50,7 +58,7 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 - **V04 — Authentication**: **PASS** — `LabAuthGateTest` (dual-off throws) + `McpServerStartAuthGateTest` (fail-closed start) + `AuthEnforcementLabTest` (9 tests: 401 matrix, scoping, rotation, forwarded-header neutrality, OAuth discovery scoped).
 - **V05 — Capability policy**: **PASS** — `ToolPolicyLabTest` (broken/empty/unknown JSON ⇒ all denied, handler never invoked) + `SettingsRepositoryImplPolicyTest`.
 - **V06 — SSRF**: **PASS (hardened: tool absent)** — `DownloadNetworkLabTest.deniesToolInHardenedVariant`; gms-scope connection-layer enforcement proven with real-TLS loopback tests (private ranges, redirects, rebinding). Firewall rule validation is device-farm scope (NOT_APPLICABLE here).
-- **V07 — TLS**: **PASS** — `TlsPolicyTest` (hardened permissive call ⇒ throw) + `DownloadNetworkLabTest.deniesCertMismatchExpiredSelfSigned` (real chain failures rejected); no reachable trust-all path (H-05 surfaces removed).
+- **V07 — TLS**: **PASS** — `DownloadNetworkLabTest.deniesCertMismatchExpiredSelfSigned` (real chain failures rejected against loopback TLS servers, no mocks); no trust-all path exists at all (`SslUtils.configurePermissiveSsl` and the two opt-in settings were deleted — audit finding 19; the old `TlsPolicyTest` proved only the deleted gate, see "Audit findings deferred in this phase, then resolved").
 - **V08 — Secrets**: **PASS (lab-scope)** — `SecretsMigrationTest` + `LabSecretsAtRestTest` + `KeystoreSecretCipherTest` (encrypted at rest, fail-closed reads, rotation, corrupt-store never OPEN, no secret logging). Logcat/CI-output sweep on changed paths; screenshots N/A (headless).
 - **V09 — Manifest/APK**: **PARTIAL → NOT_APPLICABLE for signed-release parts** — `BuildSurfaceTest` 7/7 proves merged manifest per flavor (no forbidden permissions/receivers, debug receivers absent on hardened debug). Signed-APK SHA256/cert-fingerprint checks require device farm.
 - **V10 — Reproducible build**: **PASS (enforcement in place)** — wrapper `distributionSha256Sum` (fresh-download hash proof), verification-metadata.xml 1607 artifacts enforced on every gradle run, actions SHA-pinned, external binaries pinned. Hosted-CI execution itself not run (no push).
@@ -64,7 +72,7 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 - **V18 — Coverage ≥85%**: **NOT_APPLICABLE (metric not instrumented)** — new security-critical logic carries exhaustive negative-case suites (per-item tables); JaCoCo-style ≥85% threshold verification was not configured in this phase and must be run at release gate (BLOCKED-pending-instrumentation, reason recorded).
 
 Per doc 05: no gate is marked PASS without the proof cited above; device-farm-dependent surfaces carry written reasons.
-- **Known residuals (documented per item):** `allowHttpDownloads` inert (H-04; its E2E consumer is removed - see the H-04 report, "E2E reconciliation"); `SslUtils` gated legacy helper (H-05); tunnel-credential persistence `assumeFalse`-gated on hardened (H-06, by design); capability tiers T3/T4/T5 require explicit operator provisioning (H-12); Cloudflare trycloudflare.com rate-limits the shared host IP (environmental); Ngrok requires CI secret.
+- **Known residuals (documented per item):** tunnel-credential persistence `assumeFalse`-gated on hardened (H-06, by design); capability tiers T3/T4/T5 require explicit operator provisioning (H-12); Cloudflare trycloudflare.com rate-limits the shared host IP (environmental); Ngrok requires CI secret. *(The `allowHttpDownloads`-inert and `SslUtils`-gated residuals recorded here originally were removed rather than left in place — audit finding 19 deleted both surfaces; see the resolved-findings section below.)*
 - **Risks:** none P0 for lab scope; hosted-CI execution and device-farm gates remain for release progression.
 
 
@@ -119,7 +127,8 @@ the metadata gap is the H-08 supply-chain follow-up, and the cipher gap is the H
   were in fact tampering the IV, so they are replaced by shared fixtures that flip the first
   ciphertext character.
 - **The E2E download rows asserted a policy this branch removed.** `E2EStorageToolsTest` rows
-  23-27 downloaded from the plain-HTTP fixture server after enabling `allow_http_downloads`,
+  23-27 downloaded from the plain-HTTP fixture server after enabling `allow_http_downloads`
+  (an extra that audit finding 19 has since deleted altogether),
   which H-04 turned into an inert setting: the hardened URL policy rejects every non-HTTPS URL
   before the transport is reached, so the five rows failed with `Only HTTPS downloads are
   allowed`. The E2E sources are byte-identical to `origin/main`, so this is a genuine policy
@@ -160,34 +169,80 @@ different statement from "we did not look".
   assumptions and report as skipped. `ci.yml` installs `cloudflared` (pinned and checksum
   verified) and passes the token from secrets, so both still execute for real in CI.
 
-### Audit findings analysed and deliberately deferred
+### Audit findings deferred in this phase, then resolved
 
-These are real, but each one resolves to a product or crypto decision rather than to a defect
-with a single correct patch. They are recorded so the next reader does not re-derive them.
+Five audit findings were deliberately deferred when this validation was written, because each one
+resolved to a product, policy or crypto decision rather than to a defect with a single correct
+patch. That decision has since been taken and all five are implemented on this branch (findings 8,
+9, 12, 18, 19). The reasons they waited, and what settled them, are kept here so the next reader
+does not re-derive them.
 
-- **A permanently unusable Keystore bricks the app (audit finding 9).** `SettingsRepositoryImpl.ensureAuthModelMigrated`
-  wraps the plaintext-to-envelope migration in a `DataStore.edit`, and `migrateSecretsAtRest`
-  rethrows any encryption failure so the transaction aborts with the stored data intact. That is
-  the right call for a *transient* failure. It is not recoverable for a *permanent* one — a
-  restored backup, a cleared Keystore, or a rotated hardware key — because nothing records that
-  the migration was attempted: every later `getServerConfig()` retries, throws, and never
-  succeeds. The app cannot start, and no operator action inside the app can clear it.
-  The fix is not obvious and the options pull against each other: skip the migration after N
-  failures (app starts, but `readStoredSecret` then returns the unmigrated plaintext, so the
-  at-rest protection silently does not apply), or fail closed by refusing to release those
-  secrets (protection holds, but the bearer token reads empty and H-02 enforced auth then
-  refuses to start anyway). Choosing between them changes boot behaviour on a real device, which
-  cannot be validated here. **Recommendation for the next session:** decide the policy first,
-  then persist an attempt counter alongside it so the failure is bounded and observable.
-- **The remaining lower-severity audit findings were not changed.** The non-decryptable secret
-  envelope handling (8), the hand-copied operation/tool name lists used by tests (12), the
-  single dead-code bundle (19: `SslUtils` plus its test, `allowUnverifiedHttpsCerts`,
-  `allowHttpDownloads` and its UI switch, `ForwardRegistry`, `DEVICE_SCOPED_OPERATIONS`,
-  `fingerprint_by_device`), and the Cloudflare test's fixed 60-second wait (18, timing half) are
-  each either an intentional documented decision or a removal that trades a dormant but correct
-  guard for a gap, and none of them changes behaviour a user can observe today. Finding 12 is
-  the one worth doing next: a test that asserts against a hand-copied list proves nothing about
-  the list the server actually uses, and it is a small, contained change.
+#### An unusable Keystore no longer bricks the app (findings 8 and 9)
+
+`SettingsRepositoryImpl.ensureAuthModelMigrated` wrapped the plaintext-to-envelope migration in a
+`DataStore.edit`, and `migrateSecretsAtRest` rethrew every encryption failure so the transaction
+aborted with the stored data intact. That is right for a *transient* failure, and it was the whole
+story: a *permanent* one (restored backup, cleared Keystore, rotated hardware key) was unrecoverable,
+because nothing recorded that the migration had been tried. Every later `getServerConfig()` retried,
+threw, and failed, so the app could not start and no in-app action could clear it.
+
+The two options pulled against each other — skip the migration after N failures (the app starts, but
+`readStoredSecret` then hands out the unmigrated plaintext, so at-rest protection silently stops
+applying) or refuse to release those secrets (protection holds, but the bearer token reads empty and
+H-02 enforced auth then refuses to start anyway). Both were rejected in favour of doing both, bounded:
+
+- **Policy:** a persisted failure counter (`SECRET_MIGRATION_FAILURES_KEY`, cap
+  `MAX_SECRET_MIGRATION_FAILURES = 3`) plus a once-per-launch probe. After the cap the app starts and
+  each launch makes exactly one probe attempt, so a Keystore that comes back self-heals; while the
+  cap is spent, `readStoredSecret` refuses to return an unmigrated plaintext secret (finding 9's
+  fail-closed half) instead of releasing it. The budget is per launch, not per call, and the claim is
+  a single atomic test-and-set: `Application.onCreate`, both ViewModel inits and every per-tool-call
+  `getServerConfig()` really do run concurrently, so a plain check-then-set let two first-movers
+  spend two attempts at once and a one-second hiccup became permanent.
+- **Ciphertext is never released as a secret (finding 8).** `PlaintextSecretCipher.decrypt` now throws
+  for envelope-shaped input, so a failed or unavailable migration cannot end with the ciphertext
+  string being returned as if it were the secret.
+- **The callers are guarded.** `startup/AuthModelMigration.kt` wraps the migration for
+  `McpApplication.kt:55`, `MainViewModel.kt:140` and `AccessViewModel.kt:52`, logging a warning
+  without secret material and rethrowing `CancellationException`.
+- **Proof:** `SecretsMigrationTest` (bounded-retry subgroup: per-launch budget, the 16-caller
+  concurrency race, transient recovery, the self-heal probe, the pass-through flavor),
+  `LabSecretsAtRestTest`, `KeystoreSecretCipherTest`, `AuthModelMigrationTest`, `MainViewModelTest`,
+  `AccessViewModelTest`. Each branch was drift-proved by mutation — removing the dedupe, the
+  `encryptsAtRest` guard, the counter clear, the probe, or the atomicity each makes exactly the test
+  that describes it fail, and the caller guards make four tests fail when removed. Details in
+  `docs/security/reports/07-H-06-SECRETS-AT-REST.md`.
+
+#### Tests no longer assert against hand-copied tool lists (finding 12)
+
+The integration and permission suites listed operations and tool names by hand, so they proved the
+test's copy of the surface, not the surface the server actually serves: adding or renaming a tool
+could leave them green. The lists are now derived from one expected-surface source shared by those
+suites (`testutil/ExpectedToolSurface.kt`), so a surface change fails the suites that pin it instead
+of silently passing.
+
+#### The Cloudflare test polls instead of sleeping (finding 18)
+
+`CloudflareTunnelIntegrationTest` waited a fixed 30 s for DNS before reading the tunnel URL, which
+made the suite slow when the record was ready and still flaky when it was not. It now uses a bounded
+`retryUntil(timeoutMs, intervalMs, condition)` poll (10 s interval, matching the JVM's
+`networkaddress.cache.negative.ttl`), falling through to the real gate (`fetchUrlWithRetry`) on
+expiry, so the worst case is no worse than the old fixed wait. `RetryUntilTest` covers the helper.
+
+#### The dead surface is deleted (finding 19)
+
+`SslUtils` (`configurePermissiveSsl`, zero production callers in every flavor) and its
+`TlsPolicyTest`, `ServerConfig.allowUnverifiedHttpsCerts`, `allowHttpDownloads` end to end (model,
+preferences key, repository + interface + ViewModel, settings row, two strings, ADB extra and
+dispatch, E2E receiver branch and its two handler tests), `ForwardRegistry` and `ForwardPolicyError`
+(with `test_adb_access.ForwardPolicyTest`), `DEVICE_SCOPED_OPERATIONS` in `station/broker.py` and
+`DeviceRegistry.fingerprint_by_device` (written on enrollment, never read) are all removed — 21 files,
++11/−354. Every symbol was proven unreachable by a whole-tree grep before deletion; the removals are
+the audit's own scope, kept explicit in the commit message because deletions in this repository
+normally need stated consent. The unknown/legacy-extra-key guard in `AdbConfigHandlerTest` is kept
+deliberately: it pins that an unrecognised broadcast extra is tolerated rather than fatal.
+Historical records that describe the pre-hardening state (`docs/security/BASELINE.md`, `docs/plans/*`)
+are not edited.
 
 ## Status
 

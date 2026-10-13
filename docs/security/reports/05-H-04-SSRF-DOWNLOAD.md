@@ -48,18 +48,24 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 ## Security invariants verified
 
 - Hardened: download tool absent at dispatch AND gateway; connection-layer denial proven with real loopback TLS servers (no mocks) for private ranges, rebinding, redirects, and certificate failures; redirects never auto-followed (revalidated per hop).
-- **Merge resolution 3a18e51**: h05's provider-level permissive-SSL seam test targeted a code path h04 removed outright; removed with justification in merge commit. Intent sustained by `TlsPolicyTest` (h05) + `DownloadNetworkLabTest.deniesCertMismatchExpiredSelfSigned` (h04).
+- **Merge resolution 3a18e51**: h05's provider-level permissive-SSL seam test targeted a code path h04 removed outright; removed with justification in merge commit. Intent sustained by `TlsPolicyTest` (h05) + `DownloadNetworkLabTest.deniesCertMismatchExpiredSelfSigned` (h04). *(Superseded by audit finding 19, below: the gated helper had zero production callers, so it and `TlsPolicyTest` were deleted and the intent is carried by `DownloadNetworkLabTest` alone.)*
 
 
 ## Risks and follow-ups
 
 - Documented residuals: `allowHttpDownloads` config now inert (no allowlist consumer); `SslUtils` retained as gated legacy helper with zero main-source callers; policy API types are public (extension surface).
+  *(Update, audit finding 19: the first two of these are no longer residuals — both surfaces were
+  deleted outright. `allowHttpDownloads` is gone from the model, the repository, the settings UI,
+  the ADB extras and the E2E receiver, and `SslUtils`/`TlsPolicyTest` are deleted files. The
+  public policy API types remain, as extensions are expected to use them.)*
 
 ### E2E reconciliation (2026-08)
 
 Making the download path HTTPS-only invalidated the E2E download rows, which reached a plain-HTTP
 fixture server by enabling the (now inert) `allow_http_downloads` extra. The rows are not deleted
-and the policy is not weakened; they now assert the shipped policy on-device:
+and the policy is not weakened; they now assert the shipped policy on-device. (`allow_http_downloads`
+itself was deleted entirely by audit finding 19, so the rows no longer reference it in any form; the
+history above is kept because it explains why the rows were re-aimed.)
 
 | Row | Now asserts |
 | --- | --- |

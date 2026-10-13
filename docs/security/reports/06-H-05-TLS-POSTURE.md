@@ -23,6 +23,12 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 | SslUtilsTest.kt | DELETED | Superseded by variant-aware `TlsPolicyTest` | — |
 | docs/README*  | MOD | Posture documented | — |
 
+*(Audit finding 19 update: the `SslUtils.configurePermissiveSsl` gate and `TlsPolicyTest` were both
+deleted — the helper had zero production callers in every flavor, so the gate protected nothing and
+the test proved only the gate itself. The rows above record what H-05 did at the time; the trust-all
+path is now absent from the source rather than blocked inside it, which `DownloadNetworkLabTest`
+proves by real chain rejection.)*
+
 
 ## Validations executed (not proposed)
 
@@ -43,7 +49,7 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 ## Security invariants verified
 
 - No trust-all path reachable in hardened variant (throw at choke point, proven); invalid chain/hostname/expired cert rejected by engine TLS validation (jointly proven with H-04's real-loopback `DownloadNetworkLabTest`).
-- UI/ADB toggle surfaces removed in ALL flavors; `SslUtils` remains as dead gated helper (zero main callers — H-04 residual).
+- UI/ADB toggle surfaces removed in ALL flavors — the two settings (`allowUnverifiedHttpsCerts`, `allowHttpDownloads`) and the trust-all helper `SslUtils` are gone from the source entirely (audit finding 19), so there is no permissive seam left to gate. `DownloadNetworkLabTest` rejects a wrong-host/expired/self-signed chain against real loopback TLS.
 
 
 ## Risks and follow-ups
