@@ -10,8 +10,9 @@ import org.junit.jupiter.api.Test
 
 @DisplayName("OptionalToolPermissions")
 class OptionalToolPermissionTest {
-    // Derived from the production map under test: a hand-copied duplicate here could not detect
-    // a tool being added to or removed from TOOLS_BY_PERMISSION.
+    // Derived from the production map under test, so these comparisons fail as soon as the map and
+    // the code that consumes it disagree. They cannot see a tool disappear from the map itself -
+    // `TOOLS_BY_PERMISSION pins the gated tool sets` below is the literal pin for that.
     private val cameraTools: Set<String> =
         OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.CAMERA)
     private val locationTools: Set<String> =
@@ -21,11 +22,46 @@ class OptionalToolPermissionTest {
     private val all: Set<OptionalToolPermission> = OptionalToolPermission.entries.toSet()
 
     @Test
+    fun `TOOLS_BY_PERMISSION pins the gated tool sets`() {
+        // The one literal pin on the policy table. Every other assertion in this class derives its
+        // expectation from the same map, so dropping an entry there - which silently stops the tool
+        // from requiring its permission and exposes it on a device that never granted it - would
+        // leave them all green. A tool may only be ungated by changing this test on purpose.
+        assertEquals(
+            setOf(
+                "list_cameras",
+                "list_camera_photo_resolutions",
+                "list_camera_video_resolutions",
+                "take_camera_photo",
+                "save_camera_photo",
+                "save_camera_video",
+            ),
+            OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.CAMERA),
+        )
+        assertEquals(
+            setOf("get_location"),
+            OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.LOCATION),
+        )
+        assertEquals(
+            setOf(
+                "notification_list",
+                "notification_open",
+                "notification_dismiss",
+                "notification_snooze",
+                "notification_action",
+                "notification_reply",
+            ),
+            OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.NOTIFICATION_LISTENER),
+        )
+        assertEquals(13, OptionalToolPermissions.TOOLS_BY_PERMISSION.values.sumOf { it.size })
+    }
+
+    @Test
     fun `toolsMissingPermission returns all gated tools when none granted`() {
         val missing = OptionalToolPermissions.toolsMissingPermission(emptySet())
         val expected = cameraTools + locationTools + notificationTools
         assertEquals(expected, missing)
-        assertEquals(expected.size, missing.size)
+        assertEquals(13, missing.size)
     }
 
     @Test

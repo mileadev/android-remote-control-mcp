@@ -1,5 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
 import io.mockk.coEvery
 import kotlinx.coroutines.test.runTest
@@ -42,6 +43,12 @@ class McpProtocolIntegrationTest {
                 val result = client.listTools()
                 val expected = ExpectedToolSurface.prefixedToolNames()
                 val actual = result.tools.map { it.name }.toSet()
+                assertEquals(
+                    EXPECTED_TOOL_SURFACE_SIZE,
+                    expected.size,
+                    "the catalog lists an unexpected number of tools for this flavour: " +
+                        "catalog=${expected.sorted()}",
+                )
                 assertEquals(
                     expected.size,
                     result.tools.size,
@@ -142,4 +149,14 @@ class McpProtocolIntegrationTest {
                 assertNotEquals(true, result.isError)
             }
         }
+
+    private companion object {
+        /**
+         * The one literal pin on the size of the surface. Every other assertion on the surface
+         * compares the live registration against the catalog, so a tool deleted from both the
+         * catalog and its registration helper would leave them green while the tool vanishes.
+         * `labHardened` drops `android_download_from_url`.
+         */
+        private val EXPECTED_TOOL_SURFACE_SIZE = if (BuildConfig.LAB_HARDENED) 56 else 57
+    }
 }
