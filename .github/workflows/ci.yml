@@ -13,7 +13,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# The four jobs below are independent — none consumes another's artifacts; each checks out
+# The five jobs below are independent — none consumes another's artifacts; each checks out
 # fresh, rebuilds its native deps from cache, and runs its own Gradle tasks. They therefore run
 # in PARALLEL on separate runners instead of in a needs: chain, cutting wall-clock from the sum
 # of their durations (~36 min) to the longest single job (~13 min). The former chain existed only
@@ -164,6 +164,26 @@ jobs:
             app/build/reports/jacoco/jacocoTestReport/html/
             app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
           retention-days: 14
+
+  station-tests:
+    name: Station Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          # Matches the version the other Python-using jobs in this repo pin.
+          python-version: '3.12'
+
+      # The station is pure standard-library Python, so nothing to install. It carries the
+      # lease/attestation/quarantine enforcement for the lab, and until now no workflow ran
+      # its suite, so a broken gate could reach main unnoticed.
+      - name: Run station unit tests
+        run: python3 -m unittest discover -s station/tests -t . -v
 
   test-e2e:
     name: E2E Tests

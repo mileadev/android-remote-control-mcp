@@ -9,9 +9,11 @@ atsOwnedDeviceUnavailableToInteractiveWorker.
 
 from __future__ import annotations
 
+import dataclasses
 import unittest
 
 from station.broker import ATS_IDENTITY, BrokerError
+from station import broker as broker_module
 from station.drivers import RecordingDeviceDriver, DriverResponse
 from station.leases import DeviceBusy
 from station.registry import Caller
@@ -22,6 +24,7 @@ from station.tests.support import (
     build_broker,
     build_registry,
     enroll_and_make_available,
+    load_default_policy,
     make_caller,
 )
 
@@ -323,6 +326,52 @@ class BrokerStationTest(unittest.TestCase):
         self.assertEqual(2, len(slow_driver.calls))
 
     # ------------------------------------------ gate: ATS-owned device shield
+    def test_idempotency_slot_is_scoped_to_the_caller_and_the_operation(self) -> None:
+        lease = self._acquire(self.alice, "dev-pixel")
+        first = self._observe(
+            self.alice, "dev-pixel", lease, request_id="scope-1", idempotency_key="shared-key"
+        )
+        self.assertEqual("completed", first["status"])
+        self.assertEqual(1, len(self.driver.calls))
+
+        retry = self._observe(
+            self.alice, "dev-pixel", lease, request_id="scope-2", idempotency_key="shared-key"
+        )
+        self.assertEqual("completed", retry["status"])
+        self.assertEqual(1, len(self.driver.calls), "a retry by the same caller is a replay")
+
+        # charlie holds no lease on dev-pixel. While the cache was keyed on (device, key)
+        # alone, his request was answered with alice's recorded success without ever
+        # reaching the driver, so he learned another caller's result and skipped the
+        # lease check for a mutating-adjacent operation.
+        other_caller = self._observe(
+            self.charlie,
+            "dev-pixel",
+            lease,
+            request_id="scope-3",
+            idempotency_key="shared-key",
+        )
+        self.assertEqual("denied", other_caller["status"])
+        self.assertIn("different caller", other_caller["error"])
+        self.assertEqual(1, len(self.driver.calls))
+
+        # A different operation sharing the key must not be answered with the observe
+        # result either: the batch has to actually run.
+        crossed = self.broker.execute(
+            self.alice,
+            "android.ui.batch",
+            {
+                "request_id": "scope-4",
+                "device_id": "dev-pixel",
+                "lease_id": lease["lease_id"],
+                "lease_generation": lease["lease_generation"],
+                "arguments": {"steps": [{"action": "tap", "x": 1, "y": 2}]},
+                "idempotency_key": "shared-key",
+            },
+        )
+        self.assertEqual("completed", crossed["status"])
+        self.assertEqual({"steps_done": 1}, crossed["result"])
+        self.assertEqual(2, len(self.driver.calls))
 
     def test_ats_owned_device_unavailable_to_interactive_worker(self) -> None:
         submitted = self.broker.execute(
@@ -387,6 +436,105 @@ class BrokerStationTest(unittest.TestCase):
 
     # ------------------------------------------------------- additional gates
 
+    def test_ats_owned_roster_is_only_visible_to_the_scheduler_and_operators(self) -> None:
+        submitted = self.broker.execute(
+            self.ci,
+            "android.tests.submit",
+            {
+                "request_id": "submit-roster",
+                "device_id": "dev-sched",
+                "arguments": {"test_name": "com.example.Suite#testLogin"},
+            },
+        )
+        self.assertEqual("completed", submitted["status"], submitted.get("error"))
+
+        operator_view = self.broker.execute(
+            self.alice, "android.devices.list", {"request_id": "roster-operator"}
+        )
+        self.assertEqual("completed", operator_view["status"])
+        self.assertIn("dev-sched", operator_view["result"]["ats_owned_devices"])
+
+        # dev-sched is outside bob's device_scope, so an unscoped roster would name a
+        # device he is not allowed to know exists.
+        observer_view = self.broker.execute(
+            self.bob, "android.devices.list", {"request_id": "roster-observer"}
+        )
+        self.assertEqual("completed", observer_view["status"])
+        self.assertNotIn("ats_owned_devices", observer_view["result"])
+        self.assertNotIn(
+            "dev-sched",
+            {device["device_id"] for device in observer_view["result"]["devices"]},
+        )
+
+    def test_retained_jobs_are_capped_without_stranding_queued_work(self) -> None:
+        original_cap = broker_module.MAX_RETAINED_JOBS
+        broker_module.MAX_RETAINED_JOBS = 3
+        self.addCleanup(setattr, broker_module, "MAX_RETAINED_JOBS", original_cap)
+
+        def submit(request_id: str) -> dict:
+            return self.broker.execute(
+                self.ci,
+                "android.tests.submit",
+                {
+                    "request_id": request_id,
+                    "device_id": "dev-sched",
+                    "arguments": {"test_name": "com.example.Suite#testLogin"},
+                },
+            )
+
+        # Each submission holds the only scheduled device, so it must be finished before
+        # the next one is accepted.
+        for index in range(10):
+            response = submit(f"submit-retain-{index}")
+            self.assertEqual("completed", response["status"], response.get("error"))
+            self.broker.complete_job(response["result"]["job_id"])
+        self.assertEqual(3, len(self.broker._jobs))
+
+        held = submit("submit-held")
+        self.assertEqual("completed", held["status"], held.get("error"))
+        held_id = held["result"]["job_id"]
+        # The newest job is queued and still owns the ATS lease, so the cap must skip it
+        # rather than evict it and strand the device.
+        self.assertIn(held_id, self.broker._jobs)
+        self.assertEqual("queued", self.broker._jobs[held_id]["status"])
+        self.assertEqual(ATS_IDENTITY, self.leasing.active_lease("dev-sched").caller)
+
+    def test_orphaned_queued_jobs_are_pruned_once_their_lease_is_gone(self) -> None:
+        original_cap = broker_module.MAX_RETAINED_JOBS
+        broker_module.MAX_RETAINED_JOBS = 3
+        self.addCleanup(setattr, broker_module, "MAX_RETAINED_JOBS", original_cap)
+
+        def submit(request_id: str) -> dict:
+            return self.broker.execute(
+                self.ci,
+                "android.tests.submit",
+                {
+                    "request_id": request_id,
+                    "device_id": "dev-sched",
+                    "arguments": {"test_name": "com.example.Suite#testLogin"},
+                },
+            )
+
+        # Nobody ever calls complete_job, so every entry stays "queued" for good. Skipping
+        # queued jobs unconditionally would make all ten immortal: the cap would never fire.
+        for index in range(10):
+            response = submit(f"submit-orphan-{index}")
+            self.assertEqual("completed", response["status"], response.get("error"))
+            # Let the lease lapse, otherwise the exclusive lease rejects the next submit.
+            lease = self.leasing.active_lease("dev-sched")
+            self.clock.advance((lease.expires_at if lease else self.clock.now) + 1)
+
+        self.assertLessEqual(
+            len(self.broker._jobs),
+            broker_module.MAX_RETAINED_JOBS,
+            "orphaned queued jobs must not accumulate without bound",
+        )
+        # The cap is what bounds the set; the newest submission is the one still owning its lease,
+        # so it must be among the survivors while the oldest queued orphans are the ones evicted.
+        live = {job["lease_id"] for job in self.broker._jobs.values()}
+        self.assertIn("lease-0010", live, "the live submission must not be evicted")
+        self.assertNotIn("lease-0001", live, "the oldest orphaned submission must be evicted")
+
     def test_quarantined_device_denied_even_with_previously_valid_lease(self) -> None:
         lease = self._acquire(self.alice, "dev-pixel")
         self.registry.quarantine("dev-pixel", "suspected tampering")
@@ -401,6 +549,26 @@ class BrokerStationTest(unittest.TestCase):
         )
         self.assertEqual("denied", capabilities["status"])
 
+    def test_quarantined_device_cannot_renew_or_release_its_lease(self) -> None:
+        # renew/release skipped the device gate, so containment did not stop a lease from being
+        # extended on a quarantined device, and releasing it raised from the state machine.
+        lease = self._acquire(self.alice, "dev-pixel")
+        self.registry.quarantine("dev-pixel", "suspected tampering")
+        for operation in ("android.sessions.renew", "android.sessions.release"):
+            response = self.broker.execute(
+                self.alice,
+                operation,
+                {
+                    "request_id": f"req-{operation}-quarantined",
+                    "device_id": "dev-pixel",
+                    "lease_id": lease["lease_id"],
+                    "lease_generation": lease["lease_generation"],
+                },
+            )
+            self.assertEqual("denied", response["status"], response)
+            self.assertIn("quarantined", response["error"])
+        self.assertEqual("QUARANTINED", self.registry.state("dev-pixel"))
+
     def test_catalog_revision_mismatch_is_denied(self) -> None:
         response = self.broker.execute(
             self.alice,
@@ -409,6 +577,45 @@ class BrokerStationTest(unittest.TestCase):
         )
         self.assertEqual("denied", response["status"])
         self.assertIn("catalog", response["error"])
+
+    def test_transient_backend_fault_denies_once_and_then_recovers(self) -> None:
+        class FlakyLeaseTable:
+            """Fails the first health probe, answers normally afterwards."""
+
+            def __init__(self) -> None:
+                self.probes = 0
+
+            def expire_due(self):
+                self.probes += 1
+                if self.probes == 1:
+                    raise RuntimeError("backend hiccup")
+                return ()
+
+            def active_lease(self, device_id):
+                return None
+
+            def validate(self, **_kwargs):
+                raise RuntimeError("no leases")
+
+            def generation(self, device_id):
+                raise RuntimeError("no leases")
+
+        broker, _leasing = build_broker(
+            FakeClock(), registry=self.registry, leasing=FlakyLeaseTable()
+        )
+        denied = broker.execute(
+            self.alice, "android.devices.list", {"request_id": "flaky-1"}
+        )
+        self.assertEqual("denied", denied["status"])
+        self.assertIn("backend unavailable", denied["error"])
+
+        # The fault was transient. A latched health flag kept every later request denied
+        # until the station process was restarted, which is a lab-wide outage caused by one
+        # hiccup, so the next probe must succeed again.
+        recovered = broker.execute(
+            self.alice, "android.devices.list", {"request_id": "flaky-2"}
+        )
+        self.assertEqual("completed", recovered["status"])
 
     def test_faulty_station_backend_denies_by_policy(self) -> None:
         class ExplodingLeaseTable:
@@ -572,6 +779,52 @@ class BrokerStationTest(unittest.TestCase):
             {"request_id": "acq-priv", "device_id": "dev-priv"},
         )
         self.assertEqual("completed", acquired["status"])
+
+    def test_privileged_device_attest_denied_to_non_operator_before_available(self) -> None:
+        # android.devices.attest needs only the observer role and runs while the device is still
+        # NEW/VERIFIED. The privileged-pool operator requirement used to be keyed on AVAILABLE,
+        # so an observer could attest a privileged device before it was ever offered.
+        allowlist = dict(build_registry()[0].allowlist)
+        allowlist["emulator-5558"] = "privileged"
+        registry, approval = build_registry(allowlist)
+        signature = approval.sign(
+            serial="emulator-5558", pool="privileged", device_id="dev-priv", fingerprint="fp-priv"
+        )
+        registry.enroll(
+            serial="emulator-5558",
+            device_id="dev-priv",
+            hardware_fingerprint="fp-priv",
+            approval=signature,
+        )
+        registry.verify_device("dev-priv")
+        self.assertEqual("VERIFIED", registry.state("dev-priv"))
+
+        base = load_default_policy()
+        policy = dataclasses.replace(
+            base,
+            station=dataclasses.replace(
+                base.station,
+                allowed_operations=base.station.allowed_operations + ("android.devices.attest",),
+            ),
+        )
+        broker, _ = build_broker(
+            self.clock,
+            registry=registry,
+            driver=self.driver,
+            policy=policy,
+            adb_runner=fake_adb_runner,
+        )
+        response = broker.execute(
+            make_caller("bob", ("observer",), ("dev-priv",)),
+            "android.devices.attest",
+            {
+                "request_id": "att-priv-obs",
+                "device_id": "dev-priv",
+                "arguments": {"catalog": {}},
+            },
+        )
+        self.assertEqual("denied", response["status"])
+        self.assertIn("approved operator", response["error"])
 
 
 if __name__ == "__main__":

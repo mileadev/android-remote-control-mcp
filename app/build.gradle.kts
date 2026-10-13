@@ -574,6 +574,16 @@ val jacocoExcludes =
         "**/di/**",
     )
 
+// Compiled Kotlin classes for the gms debug variant. The historical
+// `build/tmp/kotlin-classes/<variant>` layout no longer exists under this AGP/Kotlin
+// plugin, which left classDirectories empty and made the coverage gate measure nothing.
+val jacocoClasses =
+    fileTree(
+        "${layout.buildDirectory.get()}/intermediates/built_in_kotlinc/gmsDebug/compileGmsDebugKotlin/classes",
+    ) {
+        exclude(jacocoExcludes)
+    }
+
 tasks.register<JacocoReport>("jacocoTestReport") {
     dependsOn("testGmsDebugUnitTest")
 
@@ -585,12 +595,7 @@ tasks.register<JacocoReport>("jacocoTestReport") {
         csv.required.set(false)
     }
 
-    val debugTree =
-        fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/gmsDebug") {
-            exclude(jacocoExcludes)
-        }
-
-    classDirectories.setFrom(debugTree)
+    classDirectories.setFrom(jacocoClasses)
     sourceDirectories.setFrom(files("src/main/kotlin", "src/gms/kotlin"))
     executionData.setFrom(
         fileTree(layout.buildDirectory) {
@@ -602,12 +607,7 @@ tasks.register<JacocoReport>("jacocoTestReport") {
 tasks.register<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     dependsOn("jacocoTestReport")
 
-    val debugTree =
-        fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/gmsDebug") {
-            exclude(jacocoExcludes)
-        }
-
-    classDirectories.setFrom(debugTree)
+    classDirectories.setFrom(jacocoClasses)
     sourceDirectories.setFrom(files("src/main/kotlin", "src/gms/kotlin"))
     executionData.setFrom(
         fileTree(layout.buildDirectory) {
@@ -618,7 +618,14 @@ tasks.register<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     violationRules {
         rule {
             limit {
-                minimum = "0.50".toBigDecimal()
+                // Enforced floor for the gmsDebug unit-test suite. Measured instruction
+                // coverage is ~83%, so the floor sits ~8 points below it: ordinary churn
+                // does not break the build, but a real regression does. The previous
+                // 0.50 could never fail, because classDirectories resolved to an empty
+                // tree, so the rule measured zero classes and always passed.
+                counter = "INSTRUCTION"
+                value = "COVEREDRATIO"
+                minimum = "0.75".toBigDecimal()
             }
         }
     }

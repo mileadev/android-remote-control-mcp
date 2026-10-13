@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import unittest
 import urllib.error
@@ -149,6 +150,33 @@ class HttpControlPlaneTest(unittest.TestCase):
         )
         self.assertEqual(413, status)
         self.assertIn("65536", body["error"])
+
+    def test_negative_content_length_is_400(self) -> None:
+        # A negative Content-Length used to reach self.rfile.read(-1), which blocks until the
+        # peer closes, pinning the request thread for as long as the client keeps the socket.
+        request = (
+            f"POST /v1/android.devices.list HTTP/1.1\r\n"
+            f"Host: {self.control.host}:{self.control.port}\r\n"
+            f"Authorization: Bearer {DEFAULT_TOKEN}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: -1\r\n"
+            f"\r\n"
+        ).encode("utf-8")
+        with socket.create_connection((self.control.host, self.control.port), timeout=5) as sock:
+            sock.settimeout(5)
+            sock.sendall(request)
+            chunks = []
+            while True:
+                try:
+                    chunk = sock.recv(4096)
+                except TimeoutError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        raw = b"".join(chunks)
+        self.assertIn(b"400", raw.split(b"\r\n", 1)[0], raw)
+        self.assertIn(b"negative", raw)
 
     def test_unsupported_operations_return_200_unsupported_status(self) -> None:
         status, body = self._post(

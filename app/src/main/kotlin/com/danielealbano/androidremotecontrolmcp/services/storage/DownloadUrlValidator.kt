@@ -37,9 +37,14 @@ internal object DownloadUrlValidator {
         val parsedUrl = parseUrl(url)
         requireNoEmbeddedCredentials(parsedUrl)
         requireHttpsScheme(parsedUrl)
-        requirePublicLiteralHost(parsedUrl.host, policy)
+        val httpUrl = url.toHttpUrlOrNull() ?: throw McpToolException.ActionFailed("Invalid URL: $url")
+        // Validate the host OkHttp will actually dial, not the raw host `java.net.URL` reports:
+        // the two disagree on percent-encoded and other non-canonical spellings, so validating
+        // the raw form let `https://%31%32%37.0.0.1/` reach the loopback address that OkHttp
+        // resolves as an IP literal (and therefore without ever consulting [PolicyDns]).
+        requirePublicLiteralHost(httpUrl.host, policy)
 
-        return url.toHttpUrlOrNull() ?: throw McpToolException.ActionFailed("Invalid URL: $url")
+        return httpUrl
     }
 
     /**

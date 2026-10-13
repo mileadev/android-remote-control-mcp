@@ -494,14 +494,19 @@ class McpServerService : Service() {
         )
         registerLocationTools(registrar, locationProvider, privacyToolGate, toolNamePrefix, perms)
         registerSharingBundle(registrar, toolNamePrefix, perms, fileSizeLimitMb)
-        // Unit-of-work catalog integrity: a registered tool without a catalog entry (or a
-        // catalog entry without a registered tool) invalidates the dispatch gate. Hardened
-        // builds abort startup; other flavors warn and keep upstream behavior.
+        // Unit-of-work catalog integrity. A registered tool with no catalog entry cannot be
+        // tier-gated, so it is real drift and hardened builds abort startup. A catalog entry
+        // that is not registered is only overstatement: flavour gating (LAB_HARDENED drops
+        // download_from_url) and operator permissions legitimately leave entries unregistered,
+        // so that direction is logged, never fatal.
         val integrity = capabilityCatalog.checkRegisteredToolNames(registrar.registeredToolNames())
-        if (!integrity.intact) {
-            val missing = integrity.missingCatalogEntries.sorted().joinToString(separator = ", ")
-            val unregistered = integrity.unregisteredCatalogEntries.sorted().joinToString(separator = ", ")
-            val detail = "missing catalog entries=[$missing], unregistered catalog entries=[$unregistered]"
+        val missing = integrity.missingCatalogEntries.sorted().joinToString(separator = ", ")
+        val unregistered = integrity.unregisteredCatalogEntries.sorted().joinToString(separator = ", ")
+        val detail = "missing catalog entries=[$missing], unregistered catalog entries=[$unregistered]"
+        if (integrity.unregisteredCatalogEntries.isNotEmpty()) {
+            Log.i(TAG, "Capability catalog overstates the registered surface, not fatal: $detail")
+        }
+        if (integrity.missingCatalogEntries.isNotEmpty()) {
             if (BuildConfig.LAB_HARDENED) {
                 throw IllegalStateException("capability catalog integrity failure: $detail")
             }

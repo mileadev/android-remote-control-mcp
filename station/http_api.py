@@ -79,6 +79,9 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send_json(400, {"error": "invalid Content-Length"})
             return
+        if length < 0:
+            self._send_json(400, {"error": "invalid Content-Length: must not be negative"})
+            return
         if length > MAX_BODY_BYTES:
             self._send_json(413, {"error": f"request body exceeds {MAX_BODY_BYTES} bytes"})
             return

@@ -296,7 +296,7 @@ The MCP server exposes 57 tools across 14 categories. For full JSON-RPC schemas,
 
 **Encoding**: All text operations use UTF-8.
 
-**Errors**: Returns `CallToolResult(isError = true)` if location not found, file not found, file exceeds size limit, or operation fails. `android_append_file` returns a hint to use `android_write_file` if the storage provider does not support append mode. `android_download_from_url` returns an error if HTTP downloads are disabled and the URL is HTTP, or if the download times out.
+**Errors**: Returns `CallToolResult(isError = true)` if location not found, file not found, file exceeds size limit, or operation fails. `android_append_file` returns a hint to use `android_write_file` if the storage provider does not support append mode. `android_download_from_url` returns an error if the URL is not HTTPS, or if the download times out.
 
 ### 9. App Management Tools (3 tools)
 
@@ -563,6 +563,7 @@ HomeScreen contains a TopAppBar, then a scrollable layout with: ServerStatusCard
 ### Coverage
 
 - **Target**: Minimum 80% code coverage for unit tests (Jacoco, enforced via `jacocoTestCoverageVerification`)
+- **Enforced floor**: 75% instruction coverage, the gate actually applied by `jacocoTestCoverageVerification`. It sits deliberately below the ~83% measured for the `gmsDebug` suite so normal churn does not break the build.
 - **Report**: `make coverage` or `./gradlew jacocoTestReport`
 
 ### Continuous Testing

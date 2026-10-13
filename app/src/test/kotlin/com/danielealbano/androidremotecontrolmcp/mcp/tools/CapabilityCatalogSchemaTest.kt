@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -223,6 +224,25 @@ class CapabilityCatalogSchemaTest {
         val unregistered = catalog.checkRegisteredToolNames(emptyList())
         assertTrue(unregistered.missingCatalogEntries.isEmpty())
         assertEquals(setOf("tap"), unregistered.unregisteredCatalogEntries)
+    }
+
+    @Test
+    fun `gated-off surfaces report drift that is not fatal`() {
+        // The gate that consumes this lives in McpServerService.registerAllTools, which needs
+        // Hilt/Context and is jacoco-excluded, so it cannot be exercised here. What is pinned is
+        // the data invariant the gate relies on: the two ways LAB_HARDENED shrinks the registered
+        // surface (download_from_url gated off in FileTools, a denylist-shaped config denying
+        // every tool) produce unregistered catalog entries only, never missing ones. Only a
+        // registered tool without a catalog entry is fatal.
+        val catalog = CapabilityCatalog.deviceCatalog()
+
+        val gatedOff = catalog.checkRegisteredToolNames(DEVICE_ENTRY_TOOL_NAMES - "download_from_url")
+        assertFalse(gatedOff.intact, "drift is still recorded")
+        assertTrue(gatedOff.missingCatalogEntries.isEmpty(), "a gated-off catalog entry is not fatal")
+        assertEquals(setOf("download_from_url"), gatedOff.unregisteredCatalogEntries)
+
+        val deniedAll = catalog.checkRegisteredToolNames(emptyList())
+        assertTrue(deniedAll.missingCatalogEntries.isEmpty(), "an empty hardened surface is not fatal")
     }
 
     private companion object {

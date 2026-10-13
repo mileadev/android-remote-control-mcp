@@ -46,6 +46,12 @@ IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 ATS_IDENTITY = "ats-2.0"
 
+# Finished jobs are retained only so `android.tests.status` can answer for a while after
+# submission. Queued jobs are never dropped: each one still owns an ATS lease, so forgetting
+# one would strand the device. Without a cap a long-lived station grows forever, one entry
+# per test submission.
+MAX_RETAINED_JOBS = 1000
+
 ROLE_FOR_OPERATION = {
     "android.devices.list": "observer",
     "android.devices.capabilities": "observer",
@@ -145,8 +151,7 @@ class BrokerStation:
         self._utc_now = utc_now or utc_timestamp
         self._preapproved_tests = frozenset(preapproved_tests)
         self._lock = threading.RLock()
-        self._backend_healthy = True
-        self._idempotency: dict[tuple[str, str], tuple[float, object]] = {}
+        self._idempotency: dict[tuple[str, str, str, str], tuple[float, object]] = {}
         self._audit: deque[dict] = deque(maxlen=audit_size)
         self._jobs: dict[str, dict] = {}
         self._job_seq = 0
@@ -252,7 +257,14 @@ class BrokerStation:
 
     # ---------------------------------------------------------------- helpers
 
-    def _reap(self) -> None:
+    def _reap(self) -> bool:
+        """Release expired leases. Returns False when a step could not be trusted.
+
+        A failure is reported rather than latched: the caller re-probes on every request, so
+        one transient backend hiccup denies that one request instead of wedging the station
+        into denying everything until it is restarted.
+        """
+        healthy = True
         for lease in self._leasing.expire_due():
             try:
                 state = self._registry.state(lease.device_id)
@@ -261,7 +273,8 @@ class BrokerStation:
                     if self._policy.station.release_on_lease_expiry:
                         self._registry.mark_available(lease.device_id)
             except Exception:
-                self._backend_healthy = False
+                healthy = False
+        return healthy
 
     def _deny(self, request_id, caller, operation_id, device_id, error) -> dict:
         return self._respond(
@@ -298,23 +311,43 @@ class BrokerStation:
             _fail("operation requires a device_id")
         return device_id
 
-    def _idempotent_lookup(self, device_id: str, key: str | None, now: float):
+    def _idempotent_lookup(
+        self,
+        device_id: str,
+        identity: str,
+        operation_id: str,
+        key: str | None,
+        now: float,
+    ):
         if key is None:
             return None
-        entry = self._idempotency.get((device_id, key))
+        slot = (device_id, identity, operation_id, key)
+        entry = self._idempotency.get(slot)
         if entry is None:
             return None
         expires_at, outcome = entry
         if now > expires_at:
-            self._idempotency.pop((device_id, key), None)
+            self._idempotency.pop(slot, None)
             return None
         return outcome
 
-    def _idempotent_store(self, device_id: str, key: str | None, now: float, outcome) -> None:
+    def _idempotent_store(
+        self,
+        device_id: str,
+        identity: str,
+        operation_id: str,
+        key: str | None,
+        now: float,
+        outcome,
+    ) -> None:
         if key is None:
             return
+        # The slot carries the caller and the operation, not just the caller-supplied key:
+        # two identities that happen to choose the same key must not share a slot, and a
+        # retry of one operation must not be answered with another operation's result.
+        slot = (device_id, identity, operation_id, key)
         ttl = self._policy.session.idempotency_ttl_seconds
-        self._idempotency[(device_id, key)] = (now + ttl, outcome)
+        self._idempotency[slot] = (now + ttl, outcome)
 
     # --------------------------------------------------------------- execute
 
@@ -331,10 +364,12 @@ class BrokerStation:
         )
 
         try:
-            self._reap()
+            # Re-probe on every request instead of latching: a sticky flag let a single
+            # transient backend error deny the whole lab until the process restarted.
+            backend_healthy = self._reap()
         except Exception:
-            self._backend_healthy = False
-        if not self._backend_healthy:
+            backend_healthy = False
+        if not backend_healthy:
             audit("denied")
             return self._deny(
                 request_id, caller.identity, operation_id, device_id,
@@ -407,7 +442,6 @@ class BrokerStation:
         except Exception:
             if not self._policy.session.deny_on_backend_unavailable:
                 raise
-            self._backend_healthy = False
             return self._deny(
                 request_id, caller.identity, operation_id, device_id,
                 "station backend unavailable; denying by policy",
@@ -431,7 +465,11 @@ class BrokerStation:
                 raise LeaseError("privileged pool is disabled by station policy")
             if not self._policy.privileged_pool.requires_operator_approval:
                 raise LeaseError("privileged pool policy invariant broken")
-            if device.state == "AVAILABLE" and "operator" not in caller.roles:
+            # Operator approval is required in every lifecycle state. Keying this on AVAILABLE
+            # let a non-operator reach a privileged device while it was still NEW or VERIFIED:
+            # android.devices.attest needs only the observer role and runs before the device is
+            # ever offered, so an observer could attest a privileged device unapproved.
+            if "operator" not in caller.roles:
                 raise LeaseError("privileged pool requires an approved operator")
 
     def _ats_owned(self, device_id: str) -> bool:
@@ -442,7 +480,7 @@ class BrokerStation:
 
     def _op_devices_list(self, caller, env, started) -> dict:
         devices = []
-        show_serial = "operator" in caller.roles
+        is_operator = "operator" in caller.roles
         for device in self._registry.devices():
             if caller.identity != ATS_IDENTITY and device.device_id not in caller.device_scope:
                 continue
@@ -451,15 +489,23 @@ class BrokerStation:
                 "pool": device.pool,
                 "state": device.state,
             }
-            if show_serial:
+            if is_operator:
                 entry["serial"] = device.serial
             devices.append(entry)
-        ats_owned = [d.device_id for d in self._registry.devices() if self._ats_owned(d.device_id)]
+        payload = {
+            "devices": devices,
+            "catalog_revision": self.catalog_revision,
+        }
+        # The ATS-owned list is built from the whole registry, not from caller.device_scope,
+        # so handing it to every observer would let an observer enumerate leases held by
+        # other callers across the entire pool. Report it to the scheduler and operators only.
+        if caller.identity == ATS_IDENTITY or is_operator:
+            payload["ats_owned_devices"] = sorted(
+                d.device_id for d in self._registry.devices() if self._ats_owned(d.device_id)
+            )
         return self._respond(
             env["request_id"], None, "android.devices.list", "completed",
-            {"devices": devices, "ats_owned_devices": sorted(ats_owned),
-             "catalog_revision": self.catalog_revision},
-            None, None, started,
+            payload, None, None, started,
         )
 
     def _op_devices_capabilities(self, caller, env, started) -> dict:
@@ -579,7 +625,13 @@ class BrokerStation:
         device_id = self._require_device(env)
         if env["lease_id"] is None or env["lease_generation"] is None:
             _fail("android.sessions.renew requires lease_id and lease_generation")
-        self._registry.get(device_id)
+        try:
+            self._gate_device(caller, device_id)
+            self._registry.get(device_id)
+        except LeaseError as ex:
+            return self._deny(
+                env["request_id"], caller.identity, "android.sessions.renew", device_id, str(ex)
+            )
         lease = self._leasing.renew(
             device_id=device_id,
             lease_id=env["lease_id"],
@@ -600,7 +652,13 @@ class BrokerStation:
         device_id = self._require_device(env)
         if env["lease_id"] is None or env["lease_generation"] is None:
             _fail("android.sessions.release requires lease_id and lease_generation")
-        self._registry.get(device_id)
+        try:
+            self._gate_device(caller, device_id)
+            self._registry.get(device_id)
+        except LeaseError as ex:
+            return self._deny(
+                env["request_id"], caller.identity, "android.sessions.release", device_id, str(ex)
+            )
         lease = self._leasing.release(
             device_id=device_id,
             lease_id=env["lease_id"],
@@ -643,7 +701,9 @@ class BrokerStation:
         # The idempotency cache answers before lease validation: a retry that
         # carries the same key must never re-run device work, even when the
         # original lease has since expired.
-        replay = self._idempotent_lookup(device_id, env["idempotency_key"], now)
+        replay = self._idempotent_lookup(
+            device_id, caller.identity, operation_id, env["idempotency_key"], now
+        )
         if replay is not None:
             if replay == UNKNOWN_OUTCOME:
                 return self._respond(
@@ -667,7 +727,14 @@ class BrokerStation:
             )
         except DriverTimeout:
             if operation_id in MUTATING_OPERATIONS:
-                self._idempotent_store(device_id, env["idempotency_key"], now, UNKNOWN_OUTCOME)
+                self._idempotent_store(
+                    device_id,
+                    caller.identity,
+                    operation_id,
+                    env["idempotency_key"],
+                    now,
+                    UNKNOWN_OUTCOME,
+                )
                 return self._respond(
                     request_id, device_id, operation_id, UNKNOWN_OUTCOME, None,
                     "deadline exceeded before the driver confirmed the operation; "
@@ -687,7 +754,14 @@ class BrokerStation:
             try:
                 self._validate_lease(caller, env)
             except LeaseError as ex:
-                self._idempotent_store(device_id, env["idempotency_key"], now, UNKNOWN_OUTCOME)
+                self._idempotent_store(
+                    device_id,
+                    caller.identity,
+                    operation_id,
+                    env["idempotency_key"],
+                    now,
+                    UNKNOWN_OUTCOME,
+                )
                 return self._respond(
                     request_id, device_id, operation_id, UNKNOWN_OUTCOME, None,
                     f"lease no longer valid after execution ({ex}); outcome unknown "
@@ -704,10 +778,20 @@ class BrokerStation:
                 error=f"driver returned invalid status: {driver_response.status!r}",
             )
         if status == "completed":
-            self._idempotent_store(device_id, env["idempotency_key"], now, dict(self._respond(
-                request_id, device_id, operation_id, status, driver_response.result,
-                driver_response.error, driver_response.tree_generation, started,
-            )))
+            self._idempotent_store(
+                device_id,
+                caller.identity,
+                operation_id,
+                env["idempotency_key"],
+                now,
+                dict(
+                    self._respond(
+                        request_id, device_id, operation_id, status,
+                        driver_response.result, driver_response.error,
+                        driver_response.tree_generation, started,
+                    )
+                ),
+            )
         return self._respond(
             request_id, device_id, operation_id, status, driver_response.result,
             driver_response.error, driver_response.tree_generation, started,
@@ -765,6 +849,7 @@ class BrokerStation:
                 "lease_generation": lease.generation,
                 "submitted_at_utc": self._utc_now(),
             }
+            self._prune_jobs()
         return self._respond(
             request_id, device_id, operation_id, "completed",
             {"job_id": job_id, "status": "queued", "lease_id": lease.lease_id,
@@ -805,23 +890,50 @@ class BrokerStation:
 
     # ---------------------------------------------- internal scheduler hooks
 
+    def _prune_jobs(self) -> None:
+        """Drop the oldest finished jobs once the retained set exceeds its cap.
+
+        Caller holds ``self._lock``. Insertion order is oldest first. A queued job is normally
+        kept because a device is still holding its lease and dropping the entry would strand
+        that device. An *orphaned* queued job — one whose device no longer holds the lease the
+        job was submitted against, because the lease expired, was released, or the release
+        itself failed inside :meth:`complete_job` — can never be completed, so it is a pure
+        leak and is dropped like a finished one. A late ``complete_job`` for such an entry then
+        fails with "not in a completable state", which is already the correct outcome.
+        """
+        if len(self._jobs) <= MAX_RETAINED_JOBS:
+            return
+        for job_id in list(self._jobs):
+            if len(self._jobs) <= MAX_RETAINED_JOBS:
+                return
+            job = self._jobs[job_id]
+            if job["status"] == "queued" and not self._job_owns_its_lease(job):
+                del self._jobs[job_id]
+            elif job["status"] != "queued":
+                del self._jobs[job_id]
+
+    def _job_owns_its_lease(self, job: dict) -> bool:
+        """Whether ``job``'s device still holds the exact lease the job was submitted against."""
+        lease = self._leasing.active_lease(job["device_id"])
+        return (
+            lease is not None
+            and lease.lease_id == job["lease_id"]
+            and lease.generation == job["lease_generation"]
+        )
+
     def complete_job(self, job_id: str) -> None:
         """Scheduler hook: finish a queued job and release the ATS lease."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None or job["status"] != "queued":
                 raise BrokerError(f"job {job_id!r} is not in a completable state")
-        try:
-            self._leasing.release(
-                device_id=job["device_id"],
-                lease_id=job["lease_id"],
-                caller=ATS_IDENTITY,
-                generation=job["lease_generation"],
-            )
-            self._registry.mark_released(job["device_id"])
-            self._registry.mark_available(job["device_id"])
-        except Exception:
-            self._backend_healthy = False
-            raise
+        self._leasing.release(
+            device_id=job["device_id"],
+            lease_id=job["lease_id"],
+            caller=ATS_IDENTITY,
+            generation=job["lease_generation"],
+        )
+        self._registry.mark_released(job["device_id"])
+        self._registry.mark_available(job["device_id"])
         job["status"] = "completed"
         self._scrub_transient(job["device_id"])

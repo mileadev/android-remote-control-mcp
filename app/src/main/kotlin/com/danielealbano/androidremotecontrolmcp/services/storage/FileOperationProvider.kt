@@ -185,7 +185,8 @@ interface FileOperationProvider {
      * existing content. Subject to the configured file size limit.
      *
      * Respects user-configured settings:
-     * - If the URL is HTTP (not HTTPS) and `allowHttpDownloads` is false, throws ActionFailed.
+     * - Non-HTTPS URLs are always rejected with ActionFailed; plain HTTP downloads are not
+     *   supported, so `ServerConfig.allowHttpDownloads` no longer affects this call.
      *
      * Uses the user-configured download timeout. Follows HTTP redirects.
      *

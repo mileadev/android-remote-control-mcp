@@ -81,6 +81,87 @@ Per-item reports: `00`–`13` (G0, scaffold, H-01…H-12). Rollback order: rever
 
 
 
+## Post-audit corrections
+
+A later whole-repo audit corrected two statements in the V18 entry above. The phase
+conclusion is unchanged, but the record was wrong, so it is corrected here rather than
+edited in place.
+
+- **V18 was not "not instrumented".** `jacocoTestReport` and `jacocoTestCoverageVerification`
+  already existed in `app/build.gradle.kts` and were already invoked by `ci.yml`. The defect
+  was that both tasks pointed `classDirectories` at `build/tmp/kotlin-classes/gmsDebug`, a
+  directory this AGP/Kotlin plugin no longer produces. The tasks therefore measured zero
+  classes and the 50% threshold could never fail. Both tasks now read the real
+  `intermediates/built_in_kotlinc/gmsDebug/compileGmsDebugKotlin/classes` tree, and the
+  threshold is a meaningful 75% instruction coverage. Measured on the current tree:
+  82.8% instruction, 84.9% line, 71.7% branch.
+- **The stated threshold was "≥85%", not 50%.** The configured minimum was `0.50`, i.e. the
+  gate was two-thirds weaker than this report implies. `docs/PROJECT.md` recorded an 80%
+  target that no task enforced.
+
+### Audit findings recorded as verified, not changed
+
+Three audit findings were investigated to a conclusion and deliberately left as they are.
+Writing down the evidence matters here, because "we looked and it is fine on purpose" is a
+different statement from "we did not look".
+
+- **The tree-staleness gate is unreachable in production.**
+  `UiEventOperation.expectedTreeGeneration` defaults to `null`, and the staleness branch in
+  `UiEventBatchDispatcher` only fires when it is non-null. It is set non-null only in
+  `UiEventUnknownOutcomeTest`. The three production construction sites in `ActionExecutorImpl`
+  (`node-action:$nodeId`, `global-action:$actionName`, `gesture:$description`) all omit it, and
+  no MCP tool argument exposes a tree generation for a caller to supply. The multi-operation
+  `dispatch(List<UiEventOperation>)` entry point is likewise reached only from tests:
+  production calls `dispatchSingle` with exactly one operation. So the batch quota
+  (`maxBatchSize`, the empty-batch rejection) and the staleness check are contract surfaces
+  that exist for a batching caller that does not yet exist. **Decision:** keep them. Deleting a
+  documented H-10 contract surface would trade a dormant guard for a permanent gap the moment a
+  batch tool is added, and wiring `expectedTreeGeneration` in requires a new caller-visible
+  argument, which is an API decision, not a bug fix. Anyone adding a batch or "act on the node I
+  just observed" tool must thread the generation through at that point, or the guard stays
+  dormant.
+- **The station policy knobs `session.deny_on_backend_unavailable`,
+  `station.release_on_lease_expiry` and `privileged_pool.requires_operator_approval` are pinned
+  by the loader.** `lab_policy._bool_key(..., expected=True)` rejects any other value at parse
+  time, so the four guards that test them in `broker.py` can never take their failing branch.
+  **Decision:** keep them. They are fail-closed defence in depth, and the alternative — relaxing
+  the loader — is what would actually be unsafe. The real consequence is documentation, not
+  behaviour: these are not tunable knobs, and the policy schema should not read as if they are.
+- **The two host-dependent integration tests now skip instead of failing.** `cloudflared` on
+  `PATH` and `NGROK_AUTHTOKEN` are prerequisites of the host, not of the code, so their absence
+  previously turned every local `:app:test` red and buried real failures. They use JUnit
+  assumptions and report as skipped. `ci.yml` installs `cloudflared` (pinned and checksum
+  verified) and passes the token from secrets, so both still execute for real in CI.
+
+### Audit findings analysed and deliberately deferred
+
+These are real, but each one resolves to a product or crypto decision rather than to a defect
+with a single correct patch. They are recorded so the next reader does not re-derive them.
+
+- **A permanently unusable Keystore bricks the app (audit finding 9).** `SettingsRepositoryImpl.ensureAuthModelMigrated`
+  wraps the plaintext-to-envelope migration in a `DataStore.edit`, and `migrateSecretsAtRest`
+  rethrows any encryption failure so the transaction aborts with the stored data intact. That is
+  the right call for a *transient* failure. It is not recoverable for a *permanent* one — a
+  restored backup, a cleared Keystore, or a rotated hardware key — because nothing records that
+  the migration was attempted: every later `getServerConfig()` retries, throws, and never
+  succeeds. The app cannot start, and no operator action inside the app can clear it.
+  The fix is not obvious and the options pull against each other: skip the migration after N
+  failures (app starts, but `readStoredSecret` then returns the unmigrated plaintext, so the
+  at-rest protection silently does not apply), or fail closed by refusing to release those
+  secrets (protection holds, but the bearer token reads empty and H-02 enforced auth then
+  refuses to start anyway). Choosing between them changes boot behaviour on a real device, which
+  cannot be validated here. **Recommendation for the next session:** decide the policy first,
+  then persist an attempt counter alongside it so the failure is bounded and observable.
+- **The remaining lower-severity audit findings were not changed.** The non-decryptable secret
+  envelope handling (8), the hand-copied operation/tool name lists used by tests (12), the
+  single dead-code bundle (19: `SslUtils` plus its test, `allowUnverifiedHttpsCerts`,
+  `allowHttpDownloads` and its UI switch, `ForwardRegistry`, `DEVICE_SCOPED_OPERATIONS`,
+  `fingerprint_by_device`), and the Cloudflare test's fixed 60-second wait (18, timing half) are
+  each either an intentional documented decision or a removal that trades a dormant but correct
+  guard for a gap, and none of them changes behaviour a user can observe today. Finding 12 is
+  the one worth doing next: a test that asserts against a hand-copied list proves nothing about
+  the list the server actually uses, and it is a small, contained change.
+
 ## Status
 
 `PASS`

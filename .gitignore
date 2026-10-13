@@ -85,3 +85,7 @@ app/replay_*.log
 .dbip-cache/
 
 privacy-benchmark/.cache/
+
+# Python bytecode caches (station package — not build inputs)
+__pycache__/
+*.py[cod]

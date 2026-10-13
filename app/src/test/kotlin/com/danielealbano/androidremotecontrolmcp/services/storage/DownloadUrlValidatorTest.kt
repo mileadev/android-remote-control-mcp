@@ -110,6 +110,36 @@ class DownloadUrlValidatorTest {
         assertBlocked("https://0177.0.0.1/file.bin")
     }
 
+    @Test
+    fun `rejects percent-encoded private address literals`() {
+        // OkHttp decodes the host before dialling, so these reach the private address as an IP
+        // literal (OkHttp then never consults PolicyDns). Validating the raw host let them through.
+        assertBlocked("https://%31%32%37.0.0.1/file.bin")
+        assertBlocked("https://%31%32%37.0.0.1:8443/file.bin")
+        assertBlocked("https://%31%30.0.0.1/file.bin")
+        assertBlocked("https://%31%37%32.16.0.1/file.bin")
+        assertBlocked("https://%31%36%39.254.169.254/file.bin")
+    }
+
+    @Test
+    fun `rejects percent-encoded non-canonical numeric host`() {
+        assertBlocked("https://%30%78%37%66%30%30%30%30%30%31/file.bin")
+    }
+
+    @Test
+    fun `rejects encoded ipv6 loopback literal`() {
+        // Asserting on the other spelling, "https://%5B::1%5D/...", proves nothing here: the JDK
+        // rejects it while parsing the authority, so it is refused before host validation and
+        // behaves identically with or without the fix. Only the fully encoded form gets past
+        // parsing and is decoded by OkHttp, so only that one exercises the host check.
+        assertBlocked("https://%5B%3A%3A1%5D/file.bin")
+    }
+
+    @Test
+    fun `accepts percent-encoded public hostname by its decoded form`() {
+        assertEquals("example.com", validate("https://%65%78%61%6d%70%6c%65.com/file.bin").host)
+    }
+
     // ─── allowed hosts ───────────────────────────────────────────────────
 
     @Test
