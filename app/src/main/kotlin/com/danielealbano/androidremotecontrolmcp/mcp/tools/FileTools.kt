@@ -579,7 +579,7 @@ private const val DOWNLOAD_DISABLED_MESSAGE = "download_from_url is disabled in 
 /**
  * MCP tool handler for `download_from_url`.
  *
- * Downloads a file from a URL and saves it to an authorized storage location.
+ * Downloads a file over HTTPS and saves it to an authorized storage location.
  *
  * **Input**: `{ "location_id": "...", "path": "...", "url": "..." }`
  * **Output**: `{ "content": [{ "type": "text", "text": "File downloaded successfully. ..." }] }`
@@ -637,10 +637,11 @@ class DownloadFromUrlHandler
                 toolName = TOOL_NAME,
                 name = "$toolNamePrefix$TOOL_NAME",
                 description =
-                    "Downloads a file from a URL and saves it to an authorized storage location. Creates " +
+                    "Downloads a file over HTTPS and saves it to an authorized storage location. Creates " +
                         "the file and parent directories if they don't exist. Overwrites existing content. " +
-                        "Subject to the configured file size limit and download timeout. HTTP downloads and " +
-                        "unverified HTTPS certificates must be explicitly allowed in the app settings.",
+                        "Subject to the configured file size limit and download timeout. HTTPS is required " +
+                        "and certificates are always verified; loopback, private, link-local and metadata " +
+                        "addresses are blocked.",
                 inputSchema =
                     ToolSchema(
                         properties =

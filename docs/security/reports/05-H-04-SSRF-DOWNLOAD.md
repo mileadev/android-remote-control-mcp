@@ -55,6 +55,26 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 
 - Documented residuals: `allowHttpDownloads` config now inert (no allowlist consumer); `SslUtils` retained as gated legacy helper with zero main-source callers; policy API types are public (extension surface).
 
+### E2E reconciliation (2026-08)
+
+Making the download path HTTPS-only invalidated the E2E download rows, which reached a plain-HTTP
+fixture server by enabling the (now inert) `allow_http_downloads` extra. The rows are not deleted
+and the policy is not weakened; they now assert the shipped policy on-device:
+
+| Row | Now asserts |
+| --- | --- |
+| 23 | plain HTTP is refused even though the fixture host is **reachable** (`Only HTTPS downloads are allowed`, no file) |
+| 24 | embedded credentials are refused (`user:pass@host`) |
+| 25 | metadata `169.254.169.254`, loopback `127.0.0.1` and private `10.11.12.13` literals are blocked |
+| 26 | obfuscated numeric hosts (`2130706433`, `0177.0.0.1`) are rejected |
+| 27 | an unresolvable host fails closed with a clean transport error |
+
+Transport-level scenarios (200, 404, timeout, truncated stream, certificate mismatch) are covered
+against **real TLS** by `DownloadNetworkLabTest` in the app module, which drives the production
+download engine with an injected CA and an injected loopback policy, so no coverage was lost. The
+fixture server keeps only `/fixture.txt`, and `StorageE2E.configureDownloadSettings` no longer
+broadcasts the inert extra.
+
 
 ## Rollback
 

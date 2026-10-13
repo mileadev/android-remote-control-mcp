@@ -10,9 +10,9 @@ import java.net.InetSocketAddress
  *
  * Endpoints:
  * - GET /fixture.txt   -> 200, body [FIXTURE_CONTENT], Content-Type text/plain
- * - GET /missing.txt   -> 404
- * - GET /slow.txt      -> sleeps [SLOW_DELAY_MS], then 200 (exceeds the 10s test download timeout)
- * - GET /truncated.txt -> declares Content-Length 1000, writes 10 bytes, closes (mid-stream cut)
+ *
+ * Plain HTTP on purpose: the hardened download policy must refuse this server even
+ * though the container can reach it (see E2EStorageToolsTest rows 23-27).
  */
 class FixtureHttpServer {
     private var server: HttpServer? = null
@@ -24,21 +24,6 @@ class FixtureHttpServer {
             exchange.responseHeaders.add("Content-Type", "text/plain")
             exchange.sendResponseHeaders(200, body.size.toLong())
             exchange.responseBody.use { it.write(body) }
-        }
-        s.createContext("/missing.txt") { exchange ->
-            exchange.sendResponseHeaders(404, -1)
-            exchange.close()
-        }
-        s.createContext("/slow.txt") { exchange ->
-            Thread.sleep(SLOW_DELAY_MS)
-            val body = "late".toByteArray()
-            exchange.sendResponseHeaders(200, body.size.toLong())
-            exchange.responseBody.use { it.write(body) }
-        }
-        s.createContext("/truncated.txt") { exchange ->
-            exchange.sendResponseHeaders(200, 1000L)
-            exchange.responseBody.write(ByteArray(10))
-            exchange.close()
         }
         s.start()
         server = s
@@ -71,6 +56,5 @@ class FixtureHttpServer {
         /** Fixed host port, exposed to the container by SharedAndroidContainer before start. */
         const val FIXTURE_HTTP_PORT = 18923
         const val FIXTURE_CONTENT = "e2e-download-fixture-content"
-        const val SLOW_DELAY_MS = 15_000L
     }
 }

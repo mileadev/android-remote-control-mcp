@@ -64,7 +64,7 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 - **V18 — Coverage ≥85%**: **NOT_APPLICABLE (metric not instrumented)** — new security-critical logic carries exhaustive negative-case suites (per-item tables); JaCoCo-style ≥85% threshold verification was not configured in this phase and must be run at release gate (BLOCKED-pending-instrumentation, reason recorded).
 
 Per doc 05: no gate is marked PASS without the proof cited above; device-farm-dependent surfaces carry written reasons.
-- **Known residuals (documented per item):** `allowHttpDownloads` inert (H-04); `SslUtils` gated legacy helper (H-05); tunnel-credential persistence `assumeFalse`-gated on hardened (H-06, by design); capability tiers T3/T4/T5 require explicit operator provisioning (H-12); Cloudflare trycloudflare.com rate-limits the shared host IP (environmental); Ngrok requires CI secret.
+- **Known residuals (documented per item):** `allowHttpDownloads` inert (H-04; its E2E consumer is removed - see the H-04 report, "E2E reconciliation"); `SslUtils` gated legacy helper (H-05); tunnel-credential persistence `assumeFalse`-gated on hardened (H-06, by design); capability tiers T3/T4/T5 require explicit operator provisioning (H-12); Cloudflare trycloudflare.com rate-limits the shared host IP (environmental); Ngrok requires CI secret.
 - **Risks:** none P0 for lab scope; hosted-CI execution and device-farm gates remain for release progression.
 
 
@@ -98,6 +98,33 @@ edited in place.
 - **The stated threshold was "≥85%", not 50%.** The configured minimum was `0.50`, i.e. the
   gate was two-thirds weaker than this report implies. `docs/PROJECT.md` recorded an 80%
   target that no task enforced.
+
+### Defects found by the first CI run of this branch
+
+Two more defects surfaced only once the branch reached CI, which runs Temurin 17 while this
+host defaults to JDK 21. Both are fixed and covered by the follow-up hardening note in the
+H-06 report.
+
+- **`gradle/verification-metadata.xml` was incomplete.** It was generated from a warm Gradle
+  cache, and Gradle caches verification results, so the gaps were invisible locally; on a clean
+  runner configuration failed for `guava-parent-33.4.0-jre.pom` and
+  `junit-bom-5.11.0-M2.module` before any task ran. Regenerated from an empty Gradle home:
+  976 components, all checksums from the pinned repositories.
+- **`KeystoreSecretCipher.decrypt` could leak an unchecked exception.** On JDK 17 a GCM body
+  shorter than the 16-byte tag is reported as `ProviderException` (a `RuntimeException`), which
+  is not a `GeneralSecurityException`, so it escaped `decrypt`, and
+  `SecretsAtRest.readStoredSecret` — which catches only `SecretCipherException` — crashed a
+  settings read instead of failing closed. `encrypt` had the mirror-image gap. Both now catch
+  the provider-level runtime failures. The two helpers that claimed to test a tampered envelope
+  were in fact tampering the IV, so they are replaced by shared fixtures that flip the first
+  ciphertext character.
+- **The E2E download rows asserted a policy this branch removed.** `E2EStorageToolsTest` rows
+  23-27 downloaded from the plain-HTTP fixture server after enabling `allow_http_downloads`,
+  which H-04 turned into an inert setting: the hardened URL policy rejects every non-HTTPS URL
+  before the transport is reached, so the five rows failed with `Only HTTPS downloads are
+  allowed`. The E2E sources are byte-identical to `origin/main`, so this is a genuine policy
+  regression, not a test edit. The rows are re-aimed at the policy that actually ships (see the
+  H-04 report, "E2E reconciliation").
 
 ### Audit findings recorded as verified, not changed
 

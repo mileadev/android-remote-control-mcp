@@ -180,7 +180,7 @@ interface FileOperationProvider {
     ): FileReplaceResult
 
     /**
-     * Downloads a file from a URL and saves it to an authorized storage location.
+     * Downloads a file over HTTPS and saves it to an authorized storage location.
      * Creates the file and parent directories if they don't exist. Overwrites
      * existing content. Subject to the configured file size limit.
      *

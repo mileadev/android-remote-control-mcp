@@ -117,14 +117,13 @@ object StorageE2E {
         Thread.sleep(1_000)
     }
 
-    /** Sets download timeout + HTTP-download allowance via the E2E config broadcast. */
-    fun configureDownloadSettings(timeoutSeconds: Int, allowHttp: Boolean) {
+    /** Sets the download timeout via the E2E config broadcast. */
+    fun configureDownloadSettings(timeoutSeconds: Int) {
         AndroidContainerSetup.execAdb(
             "shell", "am", "broadcast", "--include-stopped-packages",
             "-a", "$E2E_ACTION_BASE.E2E_CONFIGURE",
             "-n", E2E_CONFIG_RECEIVER,
             "--ei", "download_timeout_seconds", timeoutSeconds.toString(),
-            "--ez", "allow_http_downloads", allowHttp.toString(),
         )
         Thread.sleep(1_000)
     }
