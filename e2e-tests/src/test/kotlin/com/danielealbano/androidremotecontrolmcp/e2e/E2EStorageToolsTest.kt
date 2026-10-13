@@ -474,7 +474,10 @@ class E2EStorageToolsTest {
             ),
         )
         assertEquals(true, result.isError, toolText(result))
-        assertTrue(toolText(result).contains("Download failed"), toolText(result))
+        // A resolver that reports NXDOMAIN gives "Download failed: …"; one that hijacks the name
+        // with a loopback/private answer gives "Download blocked: …". Both are fail-closed.
+        val text = toolText(result)
+        assertTrue(text.contains("Download failed") || text.contains("Download blocked"), text)
         assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-unresolvable.txt"))
     }
 

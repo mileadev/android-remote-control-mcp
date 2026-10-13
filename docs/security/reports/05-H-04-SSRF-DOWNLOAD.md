@@ -69,9 +69,11 @@ and the policy is not weakened; they now assert the shipped policy on-device:
 | 26 | obfuscated numeric hosts (`2130706433`, `0177.0.0.1`) are rejected |
 | 27 | an unresolvable host fails closed with a clean transport error |
 
-Transport-level scenarios (200, 404, timeout, truncated stream, certificate mismatch) are covered
-against **real TLS** by `DownloadNetworkLabTest` in the app module, which drives the production
-download engine with an injected CA and an injected loopback policy, so no coverage was lost. The
+Transport-level scenarios live in `DownloadNetworkLabTest` (app module), which drives the
+production download engine against **real TLS** with an injected CA and an injected loopback
+policy. Success, timeout, size cap and certificate mismatch were already covered there. The two
+that were not - an HTTP error status and a Content-Length lie (short body) - moved there in the
+same change (`rejectsHttpErrorStatusAndShortBody`), so the deleted E2E rows lost no coverage. The
 fixture server keeps only `/fixture.txt`, and `StorageE2E.configureDownloadSettings` no longer
 broadcasts the inert extra.
 

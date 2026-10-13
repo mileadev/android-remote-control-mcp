@@ -101,9 +101,9 @@ edited in place.
 
 ### Defects found by the first CI run of this branch
 
-Two more defects surfaced only once the branch reached CI, which runs Temurin 17 while this
-host defaults to JDK 21. Both are fixed and covered by the follow-up hardening note in the
-H-06 report.
+Three more defects surfaced only once the branch reached CI (which runs Temurin 17 while this
+host defaults to JDK 21) or after the hardening itself was exercised. All three are fixed below;
+the first two are also recorded in the H-06 follow-up hardening note.
 
 - **`gradle/verification-metadata.xml` was incomplete.** It was generated from a warm Gradle
   cache, and Gradle caches verification results, so the gaps were invisible locally; on a clean

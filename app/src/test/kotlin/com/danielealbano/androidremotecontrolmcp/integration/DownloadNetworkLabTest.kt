@@ -97,6 +97,9 @@ private class LoopbackServerHandle(
     var delayMillis: Long = 0L
     var declaredContentLength: Long? = null
 
+    /** Status returned by the [DownloadNetworkLabTest.serveStatus] handler. */
+    var respondStatus: Int = 200
+
     /** When there is no declared length, respond chunked (no Content-Length header) if set. */
     var chunkedResponse: Boolean = false
     var respondWithBody: ByteArray = ByteArray(PAYLOAD_BYTES) { index: Int -> (index % Byte.MAX_VALUE).toByte() }
@@ -313,6 +316,52 @@ class DownloadNetworkLabTest {
         serverHandle.delayMillis = 0L
         assertLoggedCallsCarryNoSecrets(serverHandle, caCertificate)
         serverHandle.stop()
+    }
+
+    @Test
+    @DisplayName("HTTP error status and a short body both fail the download")
+    fun rejectsHttpErrorStatusAndShortBody() {
+        val trustedMaterial = labCertificateMaterial(expiredLeaf = false, wrongSansLeaf = false)
+        val caCertificate = trustedMaterial.caCertificate!!
+        val loopbackPolicy = loopbackOnlyPolicy()
+        val config = ServerConfig(downloadTimeoutSeconds = 30, fileSizeLimitMb = 1)
+
+        val notFoundHandle = startLoopbackServer(::serveStatus, material = trustedMaterial)
+        notFoundHandle.respondStatus = 404
+        val notFoundFailure =
+            assertThrows<McpToolException.ActionFailed> {
+                loopbackEngine(caCertificate).download(
+                    notFoundHandle.baseUrl("/missing.bin"),
+                    config,
+                    loopbackPolicy,
+                ) { ByteArrayOutputStream() }
+            }
+        assertTrue(notFoundFailure.message!!.contains("HTTP status 404"), notFoundFailure.message)
+        notFoundHandle.stop()
+
+        // Content-Length lie: the server declares 1000 bytes, sends 10 and stops. Whether the
+        // client sees the stream end early or waits the read timeout out, the download must fail
+        // rather than report a short body as a complete file; rolling back the partial sink is
+        // the caller's job (MediaStoreDownloader deletes the pending row).
+        val shortHandle = startLoopbackServer(::serveLoopedBackPayload, material = trustedMaterial)
+        shortHandle.respondWithBody = ByteArray(10)
+        shortHandle.declaredContentLength = 1000L
+        val partialSink = ByteArrayOutputStream()
+        val shortFailure =
+            assertThrows<McpToolException.ActionFailed> {
+                loopbackEngine(caCertificate).download(
+                    shortHandle.baseUrl("/short.bin"),
+                    ServerConfig(downloadTimeoutSeconds = 2, fileSizeLimitMb = 1),
+                    loopbackPolicy,
+                ) { partialSink }
+            }
+        assertTrue(shortFailure.message!!.contains("Download failed"), shortFailure.message)
+        assertInstanceOf(IOException::class.java, shortFailure.cause)
+        assertTrue(
+            partialSink.size() < shortHandle.declaredContentLength!!,
+            "a truncated body must never be reported as a completed download: ${partialSink.size()} bytes",
+        )
+        shortHandle.stop()
     }
 
     @Test
@@ -560,6 +609,13 @@ class DownloadNetworkLabTest {
         } catch (_: IOException) {
             // The client may abort mid-stream when the size cap trips; nothing to report.
         }
+    }
+
+    private fun serveStatus(
+        exchange: HttpExchange,
+        serverHandle: LoopbackServerHandle,
+    ) {
+        exchange.sendResponseHeaders(serverHandle.respondStatus, -1)
     }
 
     private fun serveRedirect(

@@ -369,7 +369,7 @@ Why: end-to-end coverage of all 8 file tools against real MediaStore, in the reg
 - [x] The #154 (path filter), #155 (multi-collection), #156 (recordings) regression classes each have a live-MediaStore test
 - [x] Owned-vs-non-owned filtering verified against real `OWNER_PACKAGE_NAME` values in both directions, including the `builtin:downloads` seeded-file invisibility
 - [x] Toggle gating (allow-write/allow-delete off → denied) verified
-- [x] Download URL policy (plain HTTP, embedded credentials, metadata/loopback/private literals, obfuscated numeric hosts, unresolvable host) exercised on-device against the fixture server; transport edge scenarios (success, 404, timeout, truncated, certificate mismatch) exercised against real TLS in the app-module `DownloadNetworkLabTest` (rows 23-27 re-aimed after H-04 made downloads HTTPS-only - see `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`, "E2E reconciliation")
+- [x] Download URL policy (plain HTTP, embedded credentials, metadata/loopback/private literals, obfuscated numeric hosts, unresolvable host) exercised on-device against the fixture server; transport edge scenarios exercised against real TLS in the app-module `DownloadNetworkLabTest` - success/timeout/size-cap/certificate mismatch were already there, and HTTP 404 plus the Content-Length lie moved there with rows 23-27 (re-aimed after H-04 made downloads HTTPS-only; see `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`, "E2E reconciliation")
 
 ### Task 2.1: E2EStorageToolsTest
 
