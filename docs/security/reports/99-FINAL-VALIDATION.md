@@ -224,15 +224,18 @@ of silently passing.
 #### The Cloudflare test polls instead of sleeping (finding 18)
 
 `CloudflareTunnelIntegrationTest` waited a fixed 30 s for DNS before reading the tunnel URL, which
-made the suite slow when the record was ready and still flaky when it was not. Both waits are now
-bounded polls built on `retryUntil(timeoutMs, intervalMs, condition)`: the DNS wait keeps the same
-30 s deadline at a 10 s interval (matching the JVM's `networkaddress.cache.negative.ttl`), and the
-fetch itself polls the tunnel every 3 s for 60 s, retrying the statuses and socket errors that only
-mean "the edge is not routing yet". The budgets are pinned by `RetryUntilTest`, because the sum they
-preserve is the point: the removed code waited 30 s and then retried for another 30 s, so a poll that
-returns early must not give up sooner than that. The first version of this change did — a CI run
-caught the tunnel still unroutable at 30 s with `Network is unreachable`, and the test has the full
-60 s of patience back.
+made the suite slow when the record was ready and still flaky when it was not. The wait is now a
+single deadline-bounded poll over the tunnel itself: `fetchUrlWithRetry` runs
+`retryUntil(TUNNEL_READY_TIMEOUT_MS, TUNNEL_PROBE_INTERVAL_MS, condition)`, retrying the statuses
+and socket errors that only mean "the edge is not routing yet" for 90 s, and failing at once on any
+status that cannot mean that. The budget is what carries the patience the old code had — 30 s of
+sleep plus five attempts with 2+4+6+8+10 s of backoff, at least 60 s — and `RetryUntilTest` pins it,
+because replacing a wait with a poll must not shorten it. The first version of this change did: it
+polled DNS readiness instead and handed the fetch to the old attempt-bounded loop, so the two waits
+stopped compounding, and CI failed at 45.9 s with `Network is unreachable` where the same test had
+needed 35-39 s before. A DNS answer is also not evidence that the edge routes traffic — that run's
+name had resolved — so the probe now asks the tunnel. The class timeout rose to 240 s to stay above
+the sum of the per-step budgets.
 
 #### The dead surface is deleted (finding 19)
 

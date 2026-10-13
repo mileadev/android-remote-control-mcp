@@ -199,6 +199,27 @@ class CapabilityCatalogSchemaTest {
         }
         val locationEntry = catalog.forTool("get_location")!!
         assertTrue(locationEntry.requiredPermissions.contains("android.permission.ACCESS_FINE_LOCATION"))
+
+        // The reverse direction, so a tool that gains a gated permission but is left out of the
+        // gating table fails here instead of reaching a device that never granted it. The
+        // notification tools declare no `requiredPermissions`, so only these two can be checked.
+        val gatedPermissions =
+            mapOf(
+                "android.permission.CAMERA" to OptionalToolPermission.CAMERA,
+                "android.permission.ACCESS_FINE_LOCATION" to OptionalToolPermission.LOCATION,
+            )
+        gatedPermissions.forEach { (permission, optionalPermission) ->
+            val gatingTable = OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(optionalPermission)
+            catalog.toolNames
+                .map { catalog.forTool(it)!! }
+                .filter { permission in it.requiredPermissions }
+                .forEach { entry ->
+                    assertTrue(
+                        gatingTable.contains(entry.toolName),
+                        "${entry.toolName} requires $permission but is not gated by $optionalPermission",
+                    )
+                }
+        }
     }
 
     @Test
