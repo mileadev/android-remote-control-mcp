@@ -90,6 +90,8 @@ def build_broker(
     preapproved_tests: frozenset[str] = frozenset(),
     adb_runner=None,
     leasing: LeaseTable | None = None,
+    catalog: dict | None = None,
+    attested_tier_ceiling: str | None = None,
 ) -> tuple[BrokerStation, LeaseTable]:
     if policy is None:
         policy = load_default_policy()
@@ -111,6 +113,8 @@ def build_broker(
         clock=clock,
         utc_now=UTC,
         preapproved_tests=preapproved_tests,
+        catalog=catalog,
+        attested_tier_ceiling=attested_tier_ceiling or "T2_TEST",
     )
     return broker, leasing
 

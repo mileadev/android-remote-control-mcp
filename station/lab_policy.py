@@ -26,6 +26,7 @@ KNOWN_OPERATIONS = frozenset(
     {
         "android.devices.list",
         "android.devices.capabilities",
+        "android.devices.attest",
         "android.sessions.acquire",
         "android.sessions.renew",
         "android.sessions.release",

@@ -15,7 +15,6 @@ Responsibilities (04-CONTROL-PLANE-CONTRACT.md):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import threading
@@ -24,6 +23,14 @@ from collections import deque
 from typing import Callable
 
 from station.adb_access import AdbCommandPolicy, collect_inventory, default_run, RunFn
+from station.capability_catalog import (
+    CapabilityCatalogError,
+    PRIVILEGE_TIERS,
+    STATION_REFERENCE_CATALOG,
+    attest_device,
+    canonical_revision,
+    validate_catalog,
+)
 from station.drivers import DriverError, DriverResponse, DriverTimeout, DeviceDriver
 from station.lab_policy import (
     LabPolicy,
@@ -42,6 +49,7 @@ ATS_IDENTITY = "ats-2.0"
 ROLE_FOR_OPERATION = {
     "android.devices.list": "observer",
     "android.devices.capabilities": "observer",
+    "android.devices.attest": "observer",
     "android.api.describe": "observer",
     "android.sessions.acquire": "operator",
     "android.sessions.renew": "operator",
@@ -122,6 +130,8 @@ class BrokerStation:
         utc_now: Callable[[], str] | None = None,
         preapproved_tests: frozenset[str] = frozenset(),
         audit_size: int = 512,
+        catalog: dict | None = None,
+        attested_tier_ceiling: str = "T2_TEST",
     ) -> None:
         self._policy = policy
         self._registry = registry
@@ -140,25 +150,15 @@ class BrokerStation:
         self._audit: deque[dict] = deque(maxlen=audit_size)
         self._jobs: dict[str, dict] = {}
         self._job_seq = 0
-        self._catalog = {
-            "android.wifi.read_connection_info.v1": {
-                "api_id": "android.wifi.read_connection_info.v1",
-                "adapter_id": "sdk_wifi_read_v1",
-                "platform": "android",
-                "min_api_level": 33,
-                "max_api_level": None,
-                "privilege_tier": "T1_APP",
-                "required_permissions": ["android.permission.ACCESS_WIFI_STATE"],
-                "hardware_features": ["android.hardware.wifi"],
-                "argument_schema_revision": "1",
-                "risk": "read_only",
-                "device_status": "not_tested",
-                "verification": {"test_id": None, "apk_sha256": None, "timestamp_utc": None},
-            }
-        }
-        self.catalog_revision = "sha256:" + hashlib.sha256(
-            json.dumps(self._catalog, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        if attested_tier_ceiling not in PRIVILEGE_TIERS:
+            raise CapabilityCatalogError(
+                f"unknown attested_tier_ceiling {attested_tier_ceiling!r}"
+            )
+        self._attested_tier_ceiling = attested_tier_ceiling
+        # Device capability catalog (H-12): fail-closed schema validation; the
+        # reference catalog is the station-side source of truth for attestation.
+        self._catalog = validate_catalog(dict(catalog) if catalog else dict(STATION_REFERENCE_CATALOG))
+        self.catalog_revision = canonical_revision(self._catalog)
 
     # ------------------------------------------------------------------ audit
 
@@ -380,6 +380,7 @@ class BrokerStation:
         handler = {
             "android.devices.list": self._op_devices_list,
             "android.devices.capabilities": self._op_devices_capabilities,
+            "android.devices.attest": self._op_devices_attest,
             "android.api.describe": self._op_api_describe,
             "android.sessions.acquire": self._op_sessions_acquire,
             "android.sessions.renew": self._op_sessions_renew,
@@ -508,6 +509,42 @@ class BrokerStation:
                 "supported_operations": sorted(self._policy.station.allowed_operations),
             },
             None, None, started,
+        )
+
+    def _op_devices_attest(self, caller, env, started) -> dict:
+        device_id = self._require_device(env)
+        arguments = env["arguments"]
+        device_catalog = arguments.get("catalog")
+        if not isinstance(device_catalog, dict):
+            return self._respond(
+                env["request_id"], device_id, "android.devices.attest", "failed",
+                None, "attestation requires a 'catalog' object argument", None, started,
+            )
+        try:
+            self._gate_device(caller, device_id)
+        except LeaseError as ex:
+            return self._deny(
+                env["request_id"], caller.identity, "android.devices.attest",
+                device_id, str(ex),
+            )
+        except RegistryError:
+            raise  # mapped to "device rejected" by the dispatcher
+        try:
+            attestation = attest_device(
+                device_catalog,
+                device_catalog_revision=arguments.get("device_catalog_revision"),
+                reference_catalog=self._catalog,
+                tier_ceiling=self._attested_tier_ceiling,
+                catalog_revision=self.catalog_revision,
+            )
+        except CapabilityCatalogError as ex:
+            return self._respond(
+                env["request_id"], device_id, "android.devices.attest", "failed",
+                None, f"capability catalog is invalid: {ex}", None, started,
+            )
+        return self._respond(
+            env["request_id"], device_id, "android.devices.attest", "completed",
+            attestation, None, None, started,
         )
 
     def _op_sessions_acquire(self, caller, env, started) -> dict:

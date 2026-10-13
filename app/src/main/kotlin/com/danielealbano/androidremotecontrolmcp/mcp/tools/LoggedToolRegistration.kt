@@ -13,6 +13,7 @@ import kotlin.coroutines.coroutineContext
 private const val NANOS_PER_MILLI = 1_000_000L
 private const val FAILED_MARKER = "failed"
 private const val DENIED_MARKER = "denied"
+private const val CATALOG_DENIED_MARKER = "catalog_denied"
 
 /**
  * Error result for tool calls rejected by the [ToolPolicyGate]. The text names only the
@@ -23,6 +24,48 @@ private fun policyDeniedResult(toolName: String): CallToolResult =
         content = listOf(TextContent(text = "Tool '$toolName' is denied by the tool capability policy.")),
         isError = true,
     )
+
+/**
+ * Error result for tool calls rejected by the capability catalog gate. The text is the
+ * gate's typed denial detail (tool name + denial reason only: no catalog internals).
+ */
+private fun catalogDeniedResult(detail: String): CallToolResult =
+    CallToolResult(
+        content = listOf(TextContent(text = detail)),
+        isError = true,
+    )
+
+/**
+ * Wraps [dispatch] so the capability catalog verdict runs BEFORE the wrapped dispatch:
+ * a tool that is not catalog-listed (or whose tier exceeds the provisioned ceiling) returns a
+ * catalog-denied error result without ever reaching the wrapped handler chain, and is
+ * recorded in the server log as a [ServerLogEntry.Type.TOOL_CALL] entry with the constant
+ * NON-SENSITIVE [CATALOG_DENIED_MARKER] (duration 0). Allowed calls pass through unchanged,
+ * so the wrapped chain stays the single owner of TOOL_CALL outcome logging.
+ */
+private fun catalogDispatchHandler(
+    capabilityGate: CapabilityCatalogGate,
+    serverLog: ServerLogRepository,
+    toolName: String,
+    dispatch: suspend (CallToolRequest) -> CallToolResult,
+): suspend (CallToolRequest) -> CallToolResult =
+    { request ->
+        when (val verdict = capabilityGate.evaluate(toolName)) {
+            is CapabilityVerdict.Allowed -> {
+                dispatch(request)
+            }
+
+            is CapabilityVerdict.Denied -> {
+                serverLog.log(
+                    type = ServerLogEntry.Type.TOOL_CALL,
+                    message = CATALOG_DENIED_MARKER,
+                    toolName = toolName,
+                    durationMs = 0L,
+                )
+                catalogDeniedResult(verdict.detail)
+            }
+        }
+    }
 
 /**
  * Wraps a tool handler so every invocation is checked by [toolPolicyGate] at dispatch
@@ -89,10 +132,12 @@ internal fun loggedToolHandler(
     }
 
 /**
- * Registers tools on [server], wrapping every handler with per-call TOOL_CALL logging.
+ * Registers tools on [server], wrapping every handler with per-call TOOL_CALL logging and a
+ * pre-dispatch capability-catalog check ([CapabilityCatalogGate] runs first; the
+ * [ToolPolicyGate] verdict runs second; denied dispatches never reach the tool handler).
  * A class method is used instead of a `Server` extension so the registration signature stays
- * within detekt's default `LongParameterList` function cap (5): `addTool` below has exactly 5
- * value parameters, and swapping `server` → `registrar` keeps every `registerXxxTools` function
+ * within detekt's default `LongParameterList` caps: `addTool` below has exactly 5 value
+ * parameters, and swapping `server` → `registrar` keeps every `registerXxxTools` function
  * at its current parameter count.
  */
 class LoggedToolRegistrar(
@@ -100,8 +145,12 @@ class LoggedToolRegistrar(
     private val serverLog: ServerLogRepository,
     private val toolCallIndicator: ToolCallIndicator = ToolCallIndicator.NONE,
     private val toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
+    private val capabilityGate: CapabilityCatalogGate = CapabilityCatalogGate.INACTIVE,
 ) {
-    /** [Server.addTool] with per-call TOOL_CALL logging. [toolName] is the un-prefixed display name. */
+    private val registeredTools = LinkedHashSet<String>()
+
+    /** [Server.addTool] with pre-dispatch catalog gating and per-call TOOL_CALL logging.
+     * [toolName] is the un-prefixed dispatch/catalog key. */
     fun addTool(
         toolName: String,
         name: String,
@@ -109,9 +158,14 @@ class LoggedToolRegistrar(
         inputSchema: ToolSchema,
         handler: suspend (CallToolRequest) -> CallToolResult,
     ) {
-        val wrapped = loggedToolHandler(serverLog, toolName, toolCallIndicator, toolPolicyGate, handler)
+        registeredTools.add(toolName)
+        val policyLogged = loggedToolHandler(serverLog, toolName, toolCallIndicator, toolPolicyGate, handler)
+        val dispatch = catalogDispatchHandler(capabilityGate, serverLog, toolName, policyLogged)
         server.addTool(name = name, description = description, inputSchema = inputSchema) { request ->
-            wrapped(request)
+            dispatch(request)
         }
     }
+
+    /** The un-prefixed names registered through this registrar (catalog integrity input). */
+    fun registeredToolNames(): Set<String> = registeredTools.toSet()
 }
