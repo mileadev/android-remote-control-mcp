@@ -131,5 +131,15 @@ class KeystoreSecretCipherTest {
             assertEquals("secret-value-1", PlaintextSecretCipher.encrypt("secret-value-1"))
             assertEquals("secret-value-1", PlaintextSecretCipher.decrypt("secret-value-1"))
         }
+
+        @Test
+        fun `pass-through cipher refuses an envelope instead of returning its ciphertext`() {
+            val envelope = FakeSecretCipher().encrypt("secret-value-1")
+
+            val attempt = assertThrows(SecretCipherException::class.java) { PlaintextSecretCipher.decrypt(envelope) }
+
+            assertFalse(attempt.message.orEmpty().contains(envelope))
+            assertFalse(attempt.message.orEmpty().contains("secret-value-1"))
+        }
     }
 }

@@ -25,6 +25,7 @@ import com.danielealbano.androidremotecontrolmcp.services.notifications.McpNotif
 import com.danielealbano.androidremotecontrolmcp.services.power.BatteryOptimizationManager
 import com.danielealbano.androidremotecontrolmcp.services.storage.StorageLocationProvider
 import com.danielealbano.androidremotecontrolmcp.services.tunnel.TunnelManager
+import com.danielealbano.androidremotecontrolmcp.startup.applyAuthModelMigration
 import com.danielealbano.androidremotecontrolmcp.utils.Logger
 import com.danielealbano.androidremotecontrolmcp.utils.PermissionUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -133,8 +134,10 @@ class MainViewModel
 
         init {
             // Apply the one-time auth-model migration before the UI reflects auth defaults.
+            // Guarded: an unusable at-rest key degrades the screen instead of crashing it
+            // (audit finding 9; the guarded helper carries the reasoning).
             viewModelScope.launch(ioDispatcher) {
-                settingsRepository.ensureAuthModelMigrated()
+                applyAuthModelMigration(settingsRepository)
             }
             viewModelScope.launch(ioDispatcher) {
                 settingsRepository.serverConfig.collect { config ->

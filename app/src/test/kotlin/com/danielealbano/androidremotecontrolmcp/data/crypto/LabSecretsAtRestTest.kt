@@ -252,6 +252,57 @@ class LabSecretsAtRestTest {
 
                 assertEquals(envelope, raw(JWT_KEY), "jwt issuance failure must not clear the store")
                 assertFalse(original.isEmpty())
+
+                flushChangeLogger()
+                val settingsMessages = serverLogRepository.ofType(ServerLogEntry.Type.SETTINGS).map { it.message }
+                assertTrue(
+                    settingsMessages.any { it.contains("JWT signing secret is unusable") },
+                    "an unreadable jwt secret must be recorded for the operator",
+                )
+                assertLogsCarryNoSecretValues(original, envelope)
+            }
+    }
+
+    @Nested
+    @DisplayName("ciphertext is never released as a secret")
+    inner class CiphertextIsNeverReleasedAsASecret {
+        @Test
+        fun `a pass-through cipher reads hardened envelopes as unusable, never as the ciphertext`() =
+            testScope.runTest {
+                val bearerEnvelope = secretCipher.encrypt("secret-bearer-value-1")
+                val jwtEnvelope = secretCipher.encrypt("secret-jwt-value-1")
+                testFileCounter++
+                val downgradedStore = newDataStore()
+                downgradedStore.edit { prefs ->
+                    prefs[BEARER_KEY] = bearerEnvelope
+                    prefs[JWT_KEY] = jwtEnvelope
+                }
+                val downgradedRepository =
+                    SettingsRepositoryImpl(
+                        downgradedStore,
+                        changeLogger,
+                        EventChannelSettingsImpl(downgradedStore, changeLogger),
+                        PlaintextSecretCipher,
+                    )
+
+                assertEquals(
+                    "",
+                    downgradedRepository.getServerConfig().bearerToken,
+                    "ciphertext must never be released as a bearer token",
+                )
+
+                val issuance = runCatching { downgradedRepository.getOrCreateJwtSigningSecret() }
+                assertTrue(issuance.isFailure, "ciphertext must never be used as the JWT signing key")
+                assertTrue(issuance.exceptionOrNull() is SecretCipherException)
+
+                assertEquals(
+                    bearerEnvelope,
+                    downgradedStore.data.first()[BEARER_KEY],
+                    "a refusal must not clear the store",
+                )
+                assertIntegrityRefusalWasLogged()
+                flushChangeLogger()
+                assertLogsCarryNoSecretValues("secret-bearer-value-1", "secret-jwt-value-1", bearerEnvelope)
             }
     }
 

@@ -56,6 +56,96 @@ Human authorization boundaries: local shared lab host (Linux, JDK 21, Android SD
 - `encrypt` had the same asymmetry (`IOException` from `KeyStore.load` and provider-level `ProviderException` both escaped, despite the interface promising `SecretCipherException` "if the backing key is unavailable"); it now catches both. These two clauses are not reachable from a JVM unit test because `AndroidKeyStore` is absent there (`KeyStoreException` fires first); they are asserted only by inspection.
 
 
+## Follow-up hardening (audit findings 8 and 9, deferred decisions now made)
+
+Findings 8 and 9 of the whole-repo audit were recorded as deliberately deferred because each
+resolved to a policy decision rather than a patch. Both decisions are now made and implemented.
+
+- **A permanently unusable Keystore no longer bricks the app (finding 9).** The migration aborts
+  atomically and rethrows while a retry budget lasts, which is right for a transient failure;
+  nothing recorded that an attempt had happened, so a *permanent* one (restored backup, cleared
+  Keystore, rotated hardware key) made every later `getServerConfig()` throw forever — the app
+  could not start and no in-app action could clear it. **Policy chosen: fail closed and bound
+  the retry.** A durable counter (`secret_migration_failures`, no secret material) budgets
+  `MAX_SECRET_MIGRATION_FAILURES = 3` *launches*. Inside the budget the failure keeps being
+  rethrown to the caller and the plaintext is left untouched (unchanged fail-loud behaviour,
+  pinned by `SecretsMigrationTest`). Once the budget is spent the migration is abandoned: it is
+  not retried per call, it no longer throws, so the app starts and `getServerConfig()` returns. A
+  completed transform clears the counter, so a transient failure still heals by itself.
+- **The budget is counted in launches, not calls (finding 9, review of the fix above).** Counting
+  every call re-created the bug it was meant to fix: one launch retries from `Application.onCreate`,
+  from both settings screens and from every `getServerConfig()` — and `getServerConfig()` is read
+  per tool call (`McpServerService`, `PrivacyModeManager`, the file-operation providers), so a
+  keystore hiccup of about a second spent all three attempts and turned a transient outage into a
+  permanent one, exactly the outcome the budget exists to prevent. `SecretPersistenceContext`
+  (one per repository, i.e. one per process) now records at most one failure per launch
+  (`attemptedMigrationInThisProcess`), and extra callers inside that launch rethrow without
+  counting. An abandoned install stays callable and **probes once per launch**, so a key that comes
+  back (restored backup, unlocked keystore) clears the counter and the install heals; the probe is
+  bounded to one attempt per launch so the encrypting transform never runs on the read path.
+- **The failure no longer escapes into a crash (finding 9, caller half).** Rethrowing is only
+  useful where a caller can act on it. Every production caller outside the server path reached the
+  migration unguarded — `Application.onCreate`, `MainViewModel.init`, `AccessViewModel.init` — so
+  on a device with an unusable at-rest key the process died on every launch and no screen could say
+  why. Those three sites now call `startup/AuthModelMigration.applyAuthModelMigration`, which
+  contains the failure, logs it (`Log.w`, no secret material) and still lets `CancellationException`
+  through. The repository contract is untouched: `getServerConfig()` still surfaces the failure to
+  the server start path, which is the caller that acts on it.
+- **Why the other option was rejected.** The audit offered "skip the migration after N failures"
+  as the cheaper fix. It is not safe here: `readStoredSecret` would then release the *unmigrated
+  plaintext* — the at-rest protection would silently stop applying to exactly the secrets it
+  exists to cover, which is a downgrade, not a recovery.
+- **Consequence, accepted and deliberate.** Once the counter is non-zero, `readStoredSecret`
+  refuses unmigrated plaintext instead of releasing it (`""`, with a throttled-free `Log.w` per
+  read, no value in the message) — and only on a cipher that encrypts at rest, so a pass-through
+  flavor sharing the app data is never suppressed by a counter it did not record and cannot spend
+  (it clears the inherited counter in its own migration edit). With an unusable at-rest key the
+  bearer token therefore reads
+  empty while `bearer_token_enabled` stays true, and `LabAuthGate` refuses to start with
+  `BLANK_TOKEN_REFUSAL` — the server does not serve rather than serving unprotected. This is the
+  terminal correct state: every secret *write* also fails under a dead key, so there is no way
+  back other than re-provisioning the app data, and the abandon is recorded once in the operator
+  log (`Log.e` + a coalesced `SettingsChangeLogger` entry, no secret material) so it is
+  diagnosable from the app's own log instead of only from logcat.
+- **Ciphertext is never released as a secret (finding 8).** `PlaintextSecretCipher.decrypt`
+  returned its input verbatim, so an `enc.v1.` envelope written by a hardened install and then
+  read by another flavor of the same `applicationId` (same app data, different cipher) was
+  released as the bearer token verbatim and used as the HMAC-256 JWT signing key verbatim — both
+  derivable from the at-rest preferences file. It now throws `SecretCipherException` for an
+  `isSecretEnvelope`-shaped value, so the reader reports an unusable secret and the store is left
+  intact.
+- **The unreadable-JWT-envelope condition is now observable.** The audit's suggested fix was to
+  regenerate the JWT signing key when its envelope cannot be decrypted. **Not adopted**: the
+  stored key cannot be distinguished from a key protected by a *rotated* Keystore, and
+  regenerating a rotated-key secret would silently invalidate every already-issued token, which
+  the suite pins as a deliberate decision (`LabSecretsAtRestTest."an invalidated key makes jwt
+  issuance fail loudly instead of regenerating"`). Instead issuance still fails loudly and the
+  condition is recorded without secret material (`Log.e` + coalesced `SettingsChangeLogger`
+  entry), so a corrupt store is diagnosable instead of surfacing only as a failed OAuth call.
+  `JwtTokenServiceImpl` memoizes the secret on first use — OAuth routes, not boot — so this
+  never blocked startup.
+- **Tests.** `SecretsMigrationTest.BoundedRetryOfAnUnusableKey` (a spent budget of three failing
+  launches stops retrying, keeps the app callable, refuses the plaintext, records the abandon once,
+  leaves the plaintext in place, and a second caller inside one launch does not spend more of the
+  budget; a transient failure stays recoverable and clears the budget; an abandoned install probes
+  once per launch and heals when the key returns; a pass-through flavor neither inherits the budget
+  nor loses its plaintext secrets);
+  `LabSecretsAtRestTest.CiphertextIsNeverReleasedAsASecret` (a pass-through cipher reads hardened
+  envelopes as unusable, never as the ciphertext, for both the bearer token and JWT issuance);
+  `KeystoreSecretCipherTest."pass-through cipher refuses an envelope instead of returning its
+  ciphertext"`; and the existing invalidated-key JWT test now also asserts the operator-log
+  record. All fail with the fixes temporarily reverted and pass with them, which is recorded
+  in the audit-fix evidence for the branch. Each of the four behaviours added by the review of the
+  budget (per-launch counting, the pass-through counter removal, the `encryptsAtRest` read guard,
+  the post-abandonment probe) was verified the same way: mutating exactly that behaviour fails
+  exactly its own test.
+- **Tests for the guarded callers.** `startup/AuthModelMigrationTest` (the migration is applied
+  exactly once; a `SecretCipherException` and any other failure are logged and do not escape) plus
+  one regression test in `MainViewModelTest` and one in `AccessViewModelTest` proving the screens
+  still construct. All four fail when the guard is removed — verified by temporary removal, and the
+  two ViewModel tests fail as *uncaught exceptions*, which is the crash the finding describes.
+
+
 ## Risks and follow-ups
 
 - No P0 residual risk identified in lab scope; residual exposure is limited to the documented environment gates (above) and per-item residuals (see invariants).

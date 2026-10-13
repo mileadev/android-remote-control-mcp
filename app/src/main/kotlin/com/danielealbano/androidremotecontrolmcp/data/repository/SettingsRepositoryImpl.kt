@@ -364,8 +364,15 @@ class SettingsRepositoryImpl
             return mapPreferencesToServerConfig(dataStore.data.first(), secretCipher, refuseTunnelCredentials)
         }
 
+        /**
+         * Runs the one-time authenticating migrations and the plaintext-to-envelope
+         * migration of the at-rest secret keys, under the bounded retry policy of
+         * [migrateSecretsWithBoundedRetry]: loud while attempts remain, abandoned and
+         * recorded once the retry budget is spent, with [readStoredSecret] refusing the
+         * unmigrated plaintext instead of releasing it (audit finding 9).
+         */
         override suspend fun ensureAuthModelMigrated() {
-            dataStore.edit { prefs ->
+            migrateSecretsWithBoundedRetry(dataStore, secretsAtRest) { prefs ->
                 // One-time bearer-enabled migration (idempotent; guarded).
                 if (prefs[BEARER_TOKEN_ENABLED_INITIALIZED_KEY] != true) {
                     val wasInitialized = prefs[BEARER_TOKEN_INITIALIZED_KEY] == true
@@ -464,10 +471,11 @@ class SettingsRepositoryImpl
          *
          * Security invariants: an envelope that fails integrity verification throws
          * [SecretCipherException] instead of regenerating — silent regeneration would
-         * invalidate every already-issued token, so a corrupt store fails loudly and
-         * the stored value is never reset. A legacy plaintext secret is migrated into
-         * an authenticated envelope inside a DataStore edit that commits only when the
-         * whole transform succeeds. Secrets are never logged on any path here.
+         * invalidate every already-issued token, so a corrupt store fails loudly, the
+         * stored value is never reset, and the failure is recorded without secret
+         * material ([reportUnreadableJwtSigningSecret]). A legacy plaintext secret is
+         * migrated into an authenticated envelope inside a DataStore edit that commits
+         * only when the whole transform succeeds. Secrets are never logged on any path here.
          */
         override suspend fun getOrCreateJwtSigningSecret(): String =
             dataStore.data
@@ -476,7 +484,12 @@ class SettingsRepositoryImpl
                 ?.let { stored ->
                     when {
                         isSecretEnvelope(stored) -> {
-                            secretCipher.decrypt(stored)
+                            try {
+                                secretCipher.decrypt(stored)
+                            } catch (e: SecretCipherException) {
+                                reportUnreadableJwtSigningSecret(secretsAtRest, e)
+                                throw e
+                            }
                         }
 
                         secretCipher.encryptsAtRest -> {

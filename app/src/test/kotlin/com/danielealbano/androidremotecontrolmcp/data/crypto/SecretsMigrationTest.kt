@@ -9,13 +9,18 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerLogEntry
 import com.danielealbano.androidremotecontrolmcp.data.repository.EventChannelSettingsImpl
+import com.danielealbano.androidremotecontrolmcp.data.repository.MAX_SECRET_MIGRATION_FAILURES
+import com.danielealbano.androidremotecontrolmcp.data.repository.SECRET_MIGRATION_FAILURES_KEY
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsChangeLogger
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepositoryImpl
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -32,6 +37,8 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @DisplayName("Secrets at-rest migration (H-06)")
@@ -104,6 +111,19 @@ class SecretsMigrationTest {
     }
 
     private suspend fun raw(key: Preferences.Key<String>): String? = dataStore.data.first()[key]
+
+    /** A new repository over the same store: what a process restart looks like from here. */
+    private fun relaunch() {
+        repository =
+            SettingsRepositoryImpl(
+                dataStore,
+                changeLogger,
+                EventChannelSettingsImpl(dataStore, changeLogger),
+                secretCipher,
+            )
+    }
+
+    private suspend fun rawMigrationFailures(): Int = dataStore.data.first()[SECRET_MIGRATION_FAILURES_KEY] ?: 0
 
     private suspend fun flushChangeLogger() {
         testScope.testScheduler.advanceTimeBy(SettingsChangeLogger.COALESCE_WINDOW_MS + 1L)
@@ -276,6 +296,179 @@ class SecretsMigrationTest {
     }
 
     @Nested
+    @DisplayName("bounded retry of an unusable key")
+    inner class BoundedRetryOfAnUnusableKey {
+        @Test
+        fun `a spent budget stops the retries, keeps the app callable and refuses the plaintext`() =
+            testScope.runTest {
+                seedLegacyPlaintexts(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+                secretCipher.makeKeyUnavailable()
+
+                repeat(MAX_SECRET_MIGRATION_FAILURES - 1) { launchIndex ->
+                    val attempt = runCatching { repository.ensureAuthModelMigrated() }
+                    assertTrue(attempt.isFailure, "launch ${launchIndex + 1} must stay loud")
+                    assertTrue(attempt.exceptionOrNull() is SecretCipherException)
+                    // The several callers inside one launch (app start, both settings screens,
+                    // every settings read) retry, but they share the launch's single failure.
+                    assertTrue(runCatching { repository.getServerConfig() }.isFailure)
+                    assertEquals(launchIndex + 1, rawMigrationFailures())
+                    relaunch()
+                }
+                assertEquals(MAX_SECRET_MIGRATION_FAILURES - 1, rawMigrationFailures())
+
+                // Spends the budget's last launch; the abandon itself must not throw.
+                repository.ensureAuthModelMigrated()
+
+                assertEquals(MAX_SECRET_MIGRATION_FAILURES, rawMigrationFailures())
+                // Abandoned: no further retry, no further write, and the app is callable again.
+                repository.ensureAuthModelMigrated()
+                assertEquals(MAX_SECRET_MIGRATION_FAILURES, rawMigrationFailures())
+
+                assertEquals("", repository.getServerConfig().bearerToken)
+                assertEquals(
+                    "legacy-bearer-value-1",
+                    raw(BEARER_KEY),
+                    "a refused plaintext must be left in place, not deleted",
+                )
+
+                flushChangeLogger()
+                val settingsMessages = serverLogRepository.ofType(ServerLogEntry.Type.SETTINGS).map { it.message }
+                assertTrue(
+                    settingsMessages.any { it.contains("Secret-at-rest migration abandoned") },
+                    "an abandoned migration must be recorded for the operator",
+                )
+                assertLogsCarryNoSecretValues(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+            }
+
+        @Test
+        fun `concurrent callers of one launch record a single failure`() =
+            testScope.runTest {
+                seedLegacyPlaintexts(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+                secretCipher.makeKeyUnavailable()
+
+                // The application starts the migration on its own IO coroutine and a settings
+                // screen starts the same work; only the first of them may spend the launch's
+                // attempt, so they are released together on real threads.
+                val start = CyclicBarrier(CONCURRENT_CALLERS)
+                val attempts =
+                    (1..CONCURRENT_CALLERS)
+                        .map {
+                            async(Dispatchers.IO) {
+                                start.await(START_BARRIER_TIMEOUT_S, TimeUnit.SECONDS)
+                                runCatching { repository.ensureAuthModelMigrated() }
+                            }
+                        }.awaitAll()
+
+                assertTrue(attempts.all { it.isFailure }, "every concurrent caller must stay loud")
+                assertEquals(1, rawMigrationFailures(), "one failing launch must record one failure")
+            }
+
+        @Test
+        fun `a transient failure stays recoverable and a completed migration clears the budget`() =
+            testScope.runTest {
+                seedLegacyPlaintexts(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+                secretCipher.makeKeyUnavailable()
+
+                val failed = runCatching { repository.ensureAuthModelMigrated() }
+                assertTrue(failed.isFailure)
+                assertEquals(1, rawMigrationFailures())
+
+                // While a failure is on record the at-rest transform is not trusted:
+                // the direct read path refuses the unmigrated value instead of releasing it.
+                assertEquals("", repository.serverConfig.first().bearerToken)
+
+                secretCipher.restoreKey()
+                repository.ensureAuthModelMigrated()
+
+                assertTrue(isSecretEnvelope(raw(BEARER_KEY)!!))
+                assertEquals(0, rawMigrationFailures(), "a completed migration clears the retry budget")
+                assertEquals("legacy-bearer-value-1", repository.getServerConfig().bearerToken)
+            }
+
+        @Test
+        fun `an abandoned install probes once per launch so a keystore that comes back is used`() =
+            testScope.runTest {
+                seedLegacyPlaintexts(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+                secretCipher.makeKeyUnavailable()
+                repeat(MAX_SECRET_MIGRATION_FAILURES) {
+                    runCatching { repository.ensureAuthModelMigrated() }
+                    relaunch()
+                }
+                assertEquals(MAX_SECRET_MIGRATION_FAILURES, rawMigrationFailures())
+                assertEquals("", repository.getServerConfig().bearerToken)
+
+                // The key works again (restored backup, unlocked keystore). The next launch probes
+                // once, so the install heals by itself instead of being dead for good.
+                secretCipher.restoreKey()
+                relaunch()
+                repository.ensureAuthModelMigrated()
+
+                assertEquals(0, rawMigrationFailures(), "a healed key must clear the spent budget")
+                assertTrue(isSecretEnvelope(raw(BEARER_KEY)!!))
+                assertEquals("legacy-bearer-value-1", repository.getServerConfig().bearerToken)
+            }
+
+        @Test
+        fun `a pass-through flavor neither inherits the budget nor loses its plaintext secrets`() =
+            testScope.runTest {
+                seedLegacyPlaintexts(
+                    "legacy-bearer-value-1",
+                    "legacy-jwt-value-1",
+                    "legacy-ngrok-value-1",
+                    "legacy-cloudflare-value-1",
+                )
+                secretCipher.makeKeyUnavailable()
+                repeat(MAX_SECRET_MIGRATION_FAILURES) {
+                    runCatching { repository.ensureAuthModelMigrated() }
+                    relaunch()
+                }
+                assertEquals(MAX_SECRET_MIGRATION_FAILURES, rawMigrationFailures())
+
+                // Same app data, a flavor that performs no at-rest transform (debug builds).
+                repository =
+                    SettingsRepositoryImpl(
+                        dataStore,
+                        changeLogger,
+                        EventChannelSettingsImpl(dataStore, changeLogger),
+                        PlaintextSecretCipher,
+                    )
+
+                // The inherited counter must not suppress the reads this flavor is documented for.
+                assertEquals("legacy-bearer-value-1", repository.serverConfig.first().bearerToken)
+
+                repository.ensureAuthModelMigrated()
+
+                assertEquals(0, rawMigrationFailures(), "a pass-through flavor must not carry the budget")
+                assertEquals("legacy-bearer-value-1", repository.getServerConfig().bearerToken)
+            }
+    }
+
+    @Nested
     @DisplayName("no secrets in logs during migration and reads")
     inner class NoSecretsInLogs {
         @Test
@@ -303,5 +496,8 @@ class SecretsMigrationTest {
         val JWT_KEY = stringPreferencesKey("jwt_signing_secret")
         val NGROK_KEY = stringPreferencesKey("ngrok_authtoken")
         val CLOUDFLARE_KEY = stringPreferencesKey("cloudflare_tunnel_token")
+
+        const val CONCURRENT_CALLERS = 16
+        const val START_BARRIER_TIMEOUT_S = 30L
     }
 }

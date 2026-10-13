@@ -8,6 +8,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
 import com.danielealbano.androidremotecontrolmcp.services.apps.AppIconCache
 import com.danielealbano.androidremotecontrolmcp.services.update.UpdateCheckScheduler
+import com.danielealbano.androidremotecontrolmcp.startup.applyAuthModelMigration
 import com.danielealbano.androidremotecontrolmcp.startup.runFlavorStartupMigrations
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -50,7 +51,8 @@ class McpApplication :
         appIconCache.preload()
         // Apply the one-time auth-model migration eagerly so the UI Flow reflects the migrated model
         // promptly at startup (idempotent; the server start path also guarantees it via getServerConfig()).
-        CoroutineScope(Dispatchers.IO).launch { settingsRepository.ensureAuthModelMigrated() }
+        // Guarded: an unusable at-rest key must not crash onCreate (audit finding 9).
+        CoroutineScope(Dispatchers.IO).launch { applyAuthModelMigration(settingsRepository) }
         UpdateCheckScheduler.schedulePeriodic(this)
         Log.i(TAG, "Application initialized, notification channels created")
     }

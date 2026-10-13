@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import app.cash.turbine.test
+import com.danielealbano.androidremotecontrolmcp.data.crypto.SecretCipherException
 import com.danielealbano.androidremotecontrolmcp.data.model.BindingAddress
 import com.danielealbano.androidremotecontrolmcp.data.model.CertificateSource
 import com.danielealbano.androidremotecontrolmcp.data.model.CloudflareTunnelMode
@@ -1363,5 +1364,26 @@ class MainViewModelTest {
 
             assertEquals(true, values.last())
             job.cancel()
+        }
+
+    @Test
+    fun `a failing at-rest migration does not crash the settings screen`() =
+        runTest {
+            coEvery { settingsRepository.ensureAuthModelMigrated() } throws
+                SecretCipherException("at-rest key is unavailable")
+
+            MainViewModel(
+                settingsRepository,
+                tunnelManager,
+                storageLocationProvider,
+                batteryOptimizationManager,
+                testDispatcher,
+                approvalCoordinator,
+            )
+            advanceUntilIdle()
+
+            // The migration failure is logged and the screen still reflects the stored config.
+            verify { Log.w(any<String>(), any<String>(), any()) }
+            assertEquals(8080, viewModel.serverConfig.value.port)
         }
 }
