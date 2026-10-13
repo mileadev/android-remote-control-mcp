@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.data.crypto.PlaintextSecretCipher
 import com.danielealbano.androidremotecontrolmcp.data.model.ToolPermissionsConfig
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
 import io.mockk.every
@@ -73,6 +74,7 @@ class SettingsRepositoryImplPolicyTest {
                 dataStore,
                 changeLogger,
                 EventChannelSettingsImpl(dataStore, changeLogger),
+                PlaintextSecretCipher,
             )
     }
 

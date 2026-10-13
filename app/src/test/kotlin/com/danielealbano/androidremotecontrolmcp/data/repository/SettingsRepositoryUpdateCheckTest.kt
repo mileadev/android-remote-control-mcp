@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import com.danielealbano.androidremotecontrolmcp.data.crypto.PlaintextSecretCipher
 import com.danielealbano.androidremotecontrolmcp.data.model.AvailableUpdate
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
 import io.mockk.every
@@ -61,6 +62,7 @@ class SettingsRepositoryUpdateCheckTest {
                 dataStore,
                 changeLogger,
                 EventChannelSettingsImpl(dataStore, changeLogger),
+                PlaintextSecretCipher,
             )
     }
 

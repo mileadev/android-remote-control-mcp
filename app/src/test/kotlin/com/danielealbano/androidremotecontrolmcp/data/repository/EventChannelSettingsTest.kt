@@ -5,6 +5,7 @@
 // which is the core persistence mechanism used by SettingsRepositoryImpl.
 package com.danielealbano.androidremotecontrolmcp.data.repository
 
+import com.danielealbano.androidremotecontrolmcp.data.crypto.PlaintextSecretCipher
 import com.danielealbano.androidremotecontrolmcp.data.model.EventChannelConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.NotificationFilterMode
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
@@ -107,6 +108,7 @@ class EventChannelSettingsTest {
                     mockk(relaxed = true),
                     SettingsChangeLogger(RecordingServerLogRepository(), Dispatchers.Unconfined, 0L),
                 ),
+                PlaintextSecretCipher,
             )
 
         @Test
