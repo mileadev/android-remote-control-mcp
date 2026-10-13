@@ -1,5 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import io.mockk.coEvery
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
@@ -135,7 +136,8 @@ class McpProtocolIntegrationTest {
         }
 
     companion object {
-        private const val EXPECTED_TOOL_COUNT = 57
+        // labHardened removes android_download_from_url from the registered tool set.
+        private val EXPECTED_TOOL_COUNT = if (BuildConfig.LAB_HARDENED) 56 else 57
 
         private val EXPECTED_TOOL_NAMES =
             setOf(
@@ -210,6 +212,6 @@ class McpProtocolIntegrationTest {
                 // Sharing tools
                 "android_get_shared_content",
                 "android_share_file_via_web",
-            )
+            ).let { names -> if (BuildConfig.LAB_HARDENED) names - "android_download_from_url" else names }
     }
 }

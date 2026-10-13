@@ -1,5 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.BuiltinAccessLevel
 import com.danielealbano.androidremotecontrolmcp.data.model.FileInfo
 import com.danielealbano.androidremotecontrolmcp.data.model.StorageBackend
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -484,6 +486,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url downloads file successfully`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
@@ -509,6 +512,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url returns error when HTTP not allowed`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl(any(), any(), any())
@@ -534,6 +538,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url returns error when Content-Length exceeds size limit`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl(any(), any(), any())
@@ -559,6 +564,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url returns error when streamed size exceeds size limit`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl(any(), any(), any())
@@ -584,6 +590,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url returns error for invalid URL`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
 
             McpIntegrationTestHelper.withTestApplication(deps) { client, _ ->
@@ -733,6 +740,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url returns error when write not allowed`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl(any(), any(), any())
@@ -897,6 +905,7 @@ class FileToolsIntegrationTest {
     @Test
     fun `download_from_url with builtin location ID succeeds`() =
         runTest {
+            assumeFalse(BuildConfig.LAB_HARDENED) { "download_from_url is disabled in hardened lab builds" }
             val deps = McpIntegrationTestHelper.createMockDependencies()
             coEvery {
                 deps.fileOperationProvider.downloadFromUrl("builtin:downloads", "file.txt", "https://example.com/f")

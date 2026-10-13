@@ -1,5 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -106,6 +107,7 @@ class AuthIntegrationTest {
         }
 
     companion object {
-        private const val EXPECTED_TOOL_COUNT = 57
+        // labHardened removes android_download_from_url from the registered tool set.
+        private val EXPECTED_TOOL_COUNT = if (BuildConfig.LAB_HARDENED) 56 else 57
     }
 }

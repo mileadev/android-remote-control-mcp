@@ -53,12 +53,14 @@ import com.danielealbano.androidremotecontrolmcp.services.sharing.EphemeralFileL
 import com.danielealbano.androidremotecontrolmcp.services.sharing.EphemeralFileLinkServiceImpl
 import com.danielealbano.androidremotecontrolmcp.services.sharing.SharedContentInbox
 import com.danielealbano.androidremotecontrolmcp.services.sharing.SharedContentInboxImpl
+import com.danielealbano.androidremotecontrolmcp.services.storage.DownloadTransportFactory
 import com.danielealbano.androidremotecontrolmcp.services.storage.FileOperationProvider
 import com.danielealbano.androidremotecontrolmcp.services.storage.FileOperationProviderImpl
 import com.danielealbano.androidremotecontrolmcp.services.storage.MediaStoreFileOperations
 import com.danielealbano.androidremotecontrolmcp.services.storage.MediaStoreFileOperationsImpl
 import com.danielealbano.androidremotecontrolmcp.services.storage.PermissionChecker
 import com.danielealbano.androidremotecontrolmcp.services.storage.PermissionCheckerImpl
+import com.danielealbano.androidremotecontrolmcp.services.storage.SecureDownloadTransportFactory
 import com.danielealbano.androidremotecontrolmcp.services.storage.StorageLocationProvider
 import com.danielealbano.androidremotecontrolmcp.services.storage.StorageLocationProviderImpl
 import com.danielealbano.androidremotecontrolmcp.services.tunnel.AndroidCloudflareBinaryResolver
@@ -218,6 +220,11 @@ abstract class ServiceModule {
     @Binds
     @Singleton
     abstract fun bindMediaStoreFileOperations(impl: MediaStoreFileOperationsImpl): MediaStoreFileOperations
+
+    /** Binds the hardened HTTPS download transport factory. */
+    @Binds
+    @Singleton
+    abstract fun bindDownloadTransportFactory(impl: SecureDownloadTransportFactory): DownloadTransportFactory
 
     @Binds
     @Singleton

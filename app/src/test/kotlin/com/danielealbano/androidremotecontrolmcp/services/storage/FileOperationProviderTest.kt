@@ -7,7 +7,6 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
-import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerConfig
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
 import com.danielealbano.androidremotecontrolmcp.mcp.McpToolException
@@ -35,9 +34,8 @@ import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.extension.ExtendWith
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
+import java.io.IOException
+import java.io.OutputStream
 
 @ExtendWith(MockKExtension::class)
 @DisplayName("FileOperationProviderImpl")
@@ -56,6 +54,9 @@ class FileOperationProviderTest {
 
     @MockK
     private lateinit var mockMediaStoreFileOperations: MediaStoreFileOperations
+
+    @MockK(relaxed = true)
+    private lateinit var mockEngine: DownloadEngine
 
     private lateinit var provider: FileOperationProviderImpl
 
@@ -81,6 +82,7 @@ class FileOperationProviderTest {
                 mockStorageLocationProvider,
                 mockSettingsRepository,
                 mockMediaStoreFileOperations,
+                mockEngine,
             )
     }
 
@@ -847,19 +849,20 @@ class FileOperationProviderTest {
     @DisplayName("downloadFromUrl")
     inner class DownloadFromUrl {
         @Test
-        fun `downloadFromUrl throws ActionFailed when HTTP not allowed`() =
+        fun `downloadFromUrl throws ActionFailed when the URL is not HTTPS`() =
             runTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB, allowHttpDownloads = false)
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
                 // Act & Assert
                 val exception =
                     assertThrows<McpToolException.ActionFailed> {
                         provider.downloadFromUrl("loc1", "file.txt", "http://example.com/file.txt")
                     }
-                assertTrue(exception.message!!.contains("HTTP downloads are not allowed"))
+                assertTrue(exception.message!!.contains("Only HTTPS downloads are allowed"))
+                verify(exactly = 0) { mockEngine.download(any(), any(), any(), any()) }
             }
 
         @Test
@@ -868,7 +871,7 @@ class FileOperationProviderTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB, allowHttpDownloads = true)
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
                 // Act & Assert
                 val exception =
@@ -879,34 +882,20 @@ class FileOperationProviderTest {
             }
 
         @Test
-        fun `downloadFromUrl throws ActionFailed when Content-Length exceeds size limit`() =
+        fun `downloadFromUrl throws ActionFailed for literal private host`() =
             runTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(fileSizeLimitMb = 1, allowHttpDownloads = true)
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
-                val mockConnection = mockk<HttpURLConnection>(relaxed = true)
-                every { mockConnection.responseCode } returns 200
-                every { mockConnection.contentLengthLong } returns (2L * BYTES_PER_MB)
-
-                val mockUrl = mockk<URL>()
-                every { mockUrl.protocol } returns "https"
-
-                val spyProvider =
-                    spyk(provider)
-                every { spyProvider.openUrlConnection(any()) } returns (mockUrl to mockConnection)
-
-                // Act & Assert
+                // Act & Assert — metadata endpoint must be rejected before any connection
                 val exception =
                     assertThrows<McpToolException.ActionFailed> {
-                        spyProvider.downloadFromUrl(
-                            "loc1",
-                            "file.txt",
-                            "https://example.com/large.bin",
-                        )
+                        provider.downloadFromUrl("loc1", "file.txt", "https://169.254.169.254/latest/meta-data")
                     }
-                assertTrue(exception.message!!.contains("exceeds the configured limit"))
+                assertTrue(exception.message!!.contains("Download blocked"))
+                verify(exactly = 0) { mockEngine.download(any(), any(), any(), any()) }
             }
 
         @Test
@@ -915,20 +904,7 @@ class FileOperationProviderTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB, allowHttpDownloads = true)
-
-                val mockConnection = mockk<HttpURLConnection>(relaxed = true)
-                every { mockConnection.responseCode } returns 200
-                every { mockConnection.contentLengthLong } returns 5L
-                every { mockConnection.inputStream } returns
-                    ByteArrayInputStream("hello".toByteArray())
-
-                val mockUrl = mockk<URL>()
-                every { mockUrl.protocol } returns "https"
-
-                val spyProvider =
-                    spyk(provider)
-                every { spyProvider.openUrlConnection(any()) } returns (mockUrl to mockConnection)
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
                 val rootDoc = mockk<DocumentFile>()
                 setupRootDocument(rootDoc)
@@ -941,13 +917,14 @@ class FileOperationProviderTest {
                 val outputStream = ByteArrayOutputStream()
                 every { mockContentResolver.openOutputStream(mockFileUri, "w") } returns outputStream
 
+                every { mockEngine.download(any(), any(), any(), any()) } answers {
+                    val sink = arg<() -> OutputStream?>(3).invoke()
+                    requireNotNull(sink).use { it.write("hello".toByteArray()) }
+                    5L
+                }
+
                 // Act
-                val size =
-                    spyProvider.downloadFromUrl(
-                        "loc1",
-                        "file.txt",
-                        "https://example.com/file.txt",
-                    )
+                val size = provider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
 
                 // Assert
                 assertEquals(5L, size)
@@ -955,115 +932,62 @@ class FileOperationProviderTest {
             }
 
         @Test
-        fun `downloadFromUrl throws ActionFailed when streamed size exceeds size limit`() =
+        fun `downloadFromUrl rethrows engine failure and deletes destination`() =
             runTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(fileSizeLimitMb = 1, allowHttpDownloads = true)
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
-                val mockConnection = mockk<HttpURLConnection>(relaxed = true)
-                every { mockConnection.responseCode } returns 200
-                every { mockConnection.contentLengthLong } returns -1L
-                every { mockConnection.inputStream } returns
-                    ByteArrayInputStream(ByteArray(BYTES_PER_MB + 1))
-
-                val mockUrl = mockk<URL>()
-                every { mockUrl.protocol } returns "https"
-
-                val spyProvider =
-                    spyk(provider)
-                every { spyProvider.openUrlConnection(any()) } returns (mockUrl to mockConnection)
-
-                val rootDoc = mockk<DocumentFile>()
-                setupRootDocument(rootDoc)
-                val mockFile = mockk<DocumentFile>()
-                val mockFileUri = mockk<Uri>()
-                every { rootDoc.findFile("file.txt") } returns null
-                every { rootDoc.createFile("text/plain", "file.txt") } returns mockFile
-                every { mockFile.uri } returns mockFileUri
-                every { mockFile.delete() } returns true
-
-                val outputStream = ByteArrayOutputStream()
-                every {
-                    mockContentResolver.openOutputStream(mockFileUri, "w")
-                } returns outputStream
+                val destination = setupDownloadDestination(deletable = true)
+                every { mockEngine.download(any(), any(), any(), any()) } throws
+                    McpToolException.ActionFailed("Download blocked: loopback address ::1")
 
                 // Act & Assert
                 val exception =
                     assertThrows<McpToolException.ActionFailed> {
-                        spyProvider.downloadFromUrl(
-                            "loc1",
-                            "file.txt",
-                            "https://example.com/big.bin",
-                        )
+                        provider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
                     }
-                assertTrue(
-                    exception.message!!.contains("exceeds the configured file size limit"),
-                )
+                assertTrue(exception.message!!.contains("Download blocked"))
+                verify(exactly = 1) { destination.delete() }
+                verify(exactly = 0) { mockContentResolver.openOutputStream(any(), any()) }
             }
 
         @Test
-        fun `downloadFromUrl uses permissive SSL when unverified certs allowed`() =
+        fun `downloadFromUrl wraps storage failure and deletes destination`() =
             runTest {
                 // Arrange
                 setupAuthorizedLocation("loc1")
                 coEvery { mockSettingsRepository.getServerConfig() } returns
-                    ServerConfig(
-                        fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB,
-                        allowHttpDownloads = true,
-                        allowUnverifiedHttpsCerts = true,
-                    )
+                    ServerConfig(fileSizeLimitMb = DEFAULT_FILE_SIZE_LIMIT_MB)
 
-                val mockConnection = mockk<HttpsURLConnection>(relaxed = true)
-                every { mockConnection.responseCode } returns 200
-                every { mockConnection.contentLengthLong } returns 5L
-                every { mockConnection.inputStream } returns
-                    ByteArrayInputStream("hello".toByteArray())
+                val destination = setupDownloadDestination(deletable = true)
+                every { mockEngine.download(any(), any(), any(), any()) } throws IOException("destination gone")
 
-                val mockUrl = mockk<URL>()
-                every { mockUrl.protocol } returns "https"
-
-                val spyProvider =
-                    spyk(provider)
-                every { spyProvider.openUrlConnection(any()) } returns (mockUrl to mockConnection)
-
-                val rootDoc = mockk<DocumentFile>()
-                setupRootDocument(rootDoc)
-                val mockFile = mockk<DocumentFile>()
-                val mockFileUri = mockk<Uri>()
-                every { rootDoc.findFile("file.txt") } returns null
-                every { rootDoc.createFile("text/plain", "file.txt") } returns mockFile
-                every { mockFile.uri } returns mockFileUri
-
-                val outputStream = ByteArrayOutputStream()
-                every { mockContentResolver.openOutputStream(mockFileUri, "w") } returns outputStream
-
-                // Act and assert — permissive SSL is configured when the legacy flag is set on
-                // non-hardened builds; hardened builds fail closed before any TLS configuration.
-                if (BuildConfig.LAB_HARDENED) {
-                    val exception =
-                        runCatching {
-                            spyProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
-                        }.exceptionOrNull()
-
-                    assertTrue(exception is McpToolException.ActionFailed)
-                    assertTrue(
-                        exception!!.message!!.contains("Permissive TLS is disabled by hardened policy"),
-                    )
-                    verify(exactly = 0) { mockConnection.sslSocketFactory = any() }
-                    verify(exactly = 0) { mockConnection.hostnameVerifier = any() }
-                } else {
-                    spyProvider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
-
-                    // Assert — permissive SSL was configured
-                    verify { mockConnection.sslSocketFactory = any() }
-                    verify { mockConnection.hostnameVerifier = any() }
-                }
+                // Act & Assert
+                val exception =
+                    assertThrows<McpToolException.ActionFailed> {
+                        provider.downloadFromUrl("loc1", "file.txt", "https://example.com/file.txt")
+                    }
+                assertTrue(exception.message!!.contains("Download failed: destination gone"))
+                assertTrue(exception.cause is IOException)
+                verify(exactly = 1) { destination.delete() }
             }
+
+        /** Creates the SAF destination file and wires DocumentFile.fromTreeUri for download tests. */
+        private fun setupDownloadDestination(deletable: Boolean): DocumentFile {
+            val rootDoc = mockk<DocumentFile>()
+            setupRootDocument(rootDoc)
+            val mockFile = mockk<DocumentFile>()
+            val mockFileUri = mockk<Uri>()
+            every { rootDoc.findFile("file.txt") } returns null
+            every { rootDoc.createFile("text/plain", "file.txt") } returns mockFile
+            every { mockFile.uri } returns mockFileUri
+            every { mockFile.delete() } returns deletable
+            return mockFile
+        }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // deleteFile
     // ─────────────────────────────────────────────────────────────────────
 
