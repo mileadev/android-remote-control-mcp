@@ -9,7 +9,6 @@ import com.danielealbano.androidremotecontrolmcp.services.tunnel.CloudflaredBina
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterAll
@@ -24,6 +23,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import java.io.PrintWriter
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -122,10 +122,9 @@ class CloudflareTunnelIntegrationTest {
             assertTrue(tunnelUrl.contains(".trycloudflare.com"))
             assertEquals(TunnelProviderType.CLOUDFLARE, connected.providerType)
 
-            // Wait for Cloudflare DNS to propagate the new subdomain record.
-            // Without this delay the first lookup may get NXDOMAIN, which the
-            // JVM negative-caches, causing all subsequent retries to fail too.
-            delay(DNS_PROPAGATION_DELAY_MS)
+            // Wait for Cloudflare DNS to propagate the new subdomain record, but poll its
+            // readiness instead of sleeping the previous unconditional 30 s.
+            awaitTunnelHostnameReadiness(tunnelUrl)
 
             // Make an HTTP GET request through the tunnel
             val response = fetchUrlWithRetry(tunnelUrl)
@@ -165,6 +164,34 @@ class CloudflareTunnelIntegrationTest {
             writer.print("\r\n")
             writer.print(body)
             writer.flush()
+        }
+    }
+
+    /**
+     * Waits for the tunnel hostname in [url] to become resolvable.
+     *
+     * Cloudflare's edge publishes the quick-tunnel record asynchronously, so the first
+     * lookup can get NXDOMAIN; the JVM then negative-caches that answer for
+     * `networkaddress.cache.negative.ttl` (10 s by default), which also made the old
+     * fixed wait a coin flip: 30 s was either exactly enough or wasted.
+     *
+     * A DNS probe is the cheapest readiness signal available (no connection, no
+     * Cloudflare request) and it is precisely the precondition the fetch below needs,
+     * so the poll returns as soon as the record resolves — typically immediately, since
+     * the record usually exists by the time the tunnel reports Connected. Expiry is
+     * deliberately not a failure: [fetchUrlWithRetry] remains the gate and reports the
+     * HTTP-level problem, so the worst case is exactly what the previous delay allowed.
+     *
+     * Probes are spaced [DNS_READINESS_POLL_INTERVAL_MS] apart rather than hammering DNS:
+     * that interval matches the JVM's default negative-cache TTL, so a probe never runs
+     * before the negative entry its predecessor produced has expired. Anything shorter
+     * would spend queries replaying the cached NXDOMAIN, and anything longer would
+     * delay readiness detection by the extra margin.
+     */
+    private fun awaitTunnelHostnameReadiness(url: String) {
+        val host = URI(url).host
+        retryUntil(DNS_READINESS_TIMEOUT_MS, DNS_READINESS_POLL_INTERVAL_MS) {
+            runCatching { InetAddress.getByName(host) }.isSuccess
         }
     }
 
@@ -246,8 +273,50 @@ private const val TUNNEL_TEST_TIMEOUT_SECONDS = 120L
 /** Timeout waiting for the tunnel to connect (milliseconds). */
 private const val TUNNEL_CONNECT_TIMEOUT_MS = 60_000L
 
-/** Delay before first HTTP fetch to allow Cloudflare DNS propagation (milliseconds). */
-private const val DNS_PROPAGATION_DELAY_MS = 30_000L
+/**
+ * Deadline for the DNS-readiness poll before falling through to the fetch (milliseconds).
+ *
+ * Identical to the fixed 30 s wait this poll replaces, so a slow network is no less
+ * likely to pass than before; the poll simply stops early once the host resolves.
+ */
+private const val DNS_READINESS_TIMEOUT_MS = 30_000L
+
+/**
+ * Interval between DNS-readiness probes (milliseconds).
+ *
+ * Matches the JVM's default negative-cache TTL (`networkaddress.cache.negative.ttl`,
+ * 10 s), so a failed probe is never retried before its cached NXDOMAIN has expired.
+ */
+private const val DNS_READINESS_POLL_INTERVAL_MS = 10_000L
+
+/**
+ * Polls [condition] until it holds, or [timeoutMs] elapses.
+ *
+ * Probes immediately, then every [intervalMs]; the final sleep is shortened so the poll
+ * never waits past the deadline, and it returns as soon as [condition] holds. It is
+ * bounded and interruptible (`Thread.sleep`), matching the `Thread.sleep` retry loop in
+ * `fetchUrlWithRetry`, and it needs no new dependency.
+ *
+ * A [condition] that throws propagates its exception, leaving it to the caller to decide
+ * whether a failed probe is an error or simply "not ready yet". Visible to the test
+ * source set so `RetryUntilTest` can time it without touching the network.
+ */
+internal fun retryUntil(
+    timeoutMs: Long,
+    intervalMs: Long,
+    condition: () -> Boolean,
+): Boolean {
+    require(timeoutMs > 0) { "timeoutMs must be positive, got $timeoutMs" }
+    require(intervalMs > 0) { "intervalMs must be positive, got $intervalMs" }
+    val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+    var remainingMs = timeoutMs
+    while (remainingMs > 0) {
+        if (condition()) return true
+        Thread.sleep(minOf(intervalMs, remainingMs))
+        remainingMs = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime())
+    }
+    return false
+}
 
 /**
  * Resolves the cloudflared binary from the host system's PATH.
