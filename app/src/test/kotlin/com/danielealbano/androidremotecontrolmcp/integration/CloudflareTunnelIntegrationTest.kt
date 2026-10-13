@@ -23,7 +23,6 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import java.io.PrintWriter
-import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
@@ -122,11 +121,8 @@ class CloudflareTunnelIntegrationTest {
             assertTrue(tunnelUrl.contains(".trycloudflare.com"))
             assertEquals(TunnelProviderType.CLOUDFLARE, connected.providerType)
 
-            // Wait for Cloudflare DNS to propagate the new subdomain record, but poll its
-            // readiness instead of sleeping the previous unconditional 30 s.
-            awaitTunnelHostnameReadiness(tunnelUrl)
-
-            // Make an HTTP GET request through the tunnel
+            // Cloudflare reports the tunnel Connected before its edge routes it, so the
+            // tunnel is polled itself instead of sleeping a fixed 30 s and hoping.
             val response = fetchUrlWithRetry(tunnelUrl)
             assertTrue(
                 response.contains(EXPECTED_RESPONSE_BODY),
@@ -168,45 +164,33 @@ class CloudflareTunnelIntegrationTest {
     }
 
     /**
-     * Waits for the tunnel hostname in [url] to become resolvable.
+     * Fetches [url] through the tunnel, polling until the edge serves it.
      *
-     * Cloudflare's edge publishes the quick-tunnel record asynchronously, so the first
-     * lookup can get NXDOMAIN; the JVM then negative-caches that answer for
-     * `networkaddress.cache.negative.ttl` (10 s by default), which also made the old
-     * fixed wait a coin flip: 30 s was either exactly enough or wasted.
+     * A Cloudflare Quick Tunnel reports Connected before its edge has finished wiring the
+     * route, and the record for its fresh subdomain is published asynchronously too, so the
+     * first requests fail one way or another: NXDOMAIN or `Network is unreachable` while the
+     * name and its address settle, 404 while the route is not published, and the whole 5xx
+     * range once it is (Bad Gateway, Cloudflare Argo error 1033 → HTTP 530, edge errors
+     * 520–527). None of those is a test failure, so they are retried until the
+     * [TUNNEL_READY_TIMEOUT_MS] budget is spent; an HTTP status that cannot mean "not ready
+     * yet" fails immediately.
      *
-     * A DNS probe is the cheapest readiness signal available (no connection, no
-     * Cloudflare request) and it is precisely the precondition the fetch below needs,
-     * so the poll returns as soon as the record resolves — typically immediately, since
-     * the record usually exists by the time the tunnel reports Connected. Expiry is
-     * deliberately not a failure: [fetchUrlWithRetry] remains the gate and reports the
-     * HTTP-level problem, so the worst case is exactly what the previous delay allowed.
+     * Polling the tunnel is what makes the wait both correct and bounded: a resolvable name is
+     * not evidence that the edge routes traffic, so each probe asks the question the test
+     * actually has — "does the tunnel serve?" — and the deadline is what stops asking. The
+     * `Network is unreachable` failure that forced this rewrite came from the opposite
+     * arrangement: a name that had already resolved, and a retry window too short to outlast
+     * the edge's own settling.
      *
-     * Probes are spaced [DNS_READINESS_POLL_INTERVAL_MS] apart rather than hammering DNS:
-     * that interval matches the JVM's default negative-cache TTL, so a probe never runs
-     * before the negative entry its predecessor produced has expired. Anything shorter
-     * would spend queries replaying the cached NXDOMAIN, and anything longer would
-     * delay readiness detection by the extra margin.
-     */
-    private fun awaitTunnelHostnameReadiness(url: String) {
-        val host = URI(url).host
-        retryUntil(DNS_READINESS_TIMEOUT_MS, DNS_READINESS_POLL_INTERVAL_MS) {
-            runCatching { InetAddress.getByName(host) }.isSuccess
-        }
-    }
-
-    /**
-     * Fetches a URL with retries.
-     *
-     * Cloudflare Quick Tunnels can take a moment to become fully routable
-     * after the URL is reported. While the edge is still wiring up the route
-     * it returns transient errors — 404 (route/DNS not propagated yet) and the
-     * whole 5xx range (Bad Gateway plus Cloudflare Argo error 1033 → HTTP 530
-     * and edge errors 520–527). Retries handle all of these.
+     * The budget covers what the fixed wait plus the old retry loop allowed (30 s of sleep
+     * plus five attempts with growing backoff and 10 s socket timeouts, ≥60 s of waiting), so
+     * replacing the sleep with a poll cannot run out of patience sooner than the code it
+     * replaced. A tunnel that is already routing is reached on the first probe.
      */
     private fun fetchUrlWithRetry(url: String): String {
-        var lastException: Exception? = null
-        repeat(FETCH_MAX_RETRIES) { attempt ->
+        var body: String? = null
+        var lastFailure = "no attempt was made"
+        retryUntil(TUNNEL_READY_TIMEOUT_MS, TUNNEL_PROBE_INTERVAL_MS) {
             try {
                 val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
                 connection.connectTimeout = FETCH_CONNECT_TIMEOUT_MS
@@ -215,34 +199,29 @@ class CloudflareTunnelIntegrationTest {
 
                 val responseCode = connection.responseCode
                 if (responseCode == HTTP_OK) {
-                    return connection.inputStream.bufferedReader().readText()
+                    body = connection.inputStream.bufferedReader().readText()
+                    return@retryUntil true
                 }
 
-                // Retry while the tunnel is not yet fully routed
-                if (responseCode == HTTP_NOT_FOUND || responseCode in HTTP_SERVER_ERROR_RANGE) {
-                    Thread.sleep(FETCH_RETRY_DELAY_MS * (attempt + 1))
-                    return@repeat
+                // Retry while the tunnel is not yet fully routed.
+                if (responseCode != HTTP_NOT_FOUND && responseCode !in HTTP_SERVER_ERROR_RANGE) {
+                    fail<String>("Unexpected HTTP response code: $responseCode")
                 }
-
-                fail<String>("Unexpected HTTP response code: $responseCode")
+                lastFailure = "HTTP $responseCode"
+                false
             } catch (e: Exception) {
-                lastException = e
-                Thread.sleep(FETCH_RETRY_DELAY_MS * (attempt + 1))
+                lastFailure = e.message ?: e::class.java.simpleName
+                false
             }
         }
-        fail<String>(
-            "Failed to fetch tunnel URL after $FETCH_MAX_RETRIES attempts: ${lastException?.message}",
-        )
-        // Unreachable but satisfies the compiler
-        return ""
+        return body
+            ?: fail("Tunnel $url served no response within $TUNNEL_READY_TIMEOUT_MS ms: $lastFailure")
     }
 
     companion object {
         private const val EXPECTED_RESPONSE_BODY = "tunnel-test-ok"
-        private const val FETCH_MAX_RETRIES = 5
         private const val FETCH_CONNECT_TIMEOUT_MS = 10_000
         private const val FETCH_READ_TIMEOUT_MS = 10_000
-        private const val FETCH_RETRY_DELAY_MS = 2_000L
         private const val HTTP_OK = 200
         private const val HTTP_NOT_FOUND = 404
         private val HTTP_SERVER_ERROR_RANGE = 500..599
@@ -267,27 +246,40 @@ class CloudflareTunnelIntegrationTest {
     }
 }
 
-/** Timeout for the entire test class (seconds). */
-private const val TUNNEL_TEST_TIMEOUT_SECONDS = 120L
+/**
+ * Timeout for the entire test class (seconds).
+ *
+ * Above the sum of the individual budgets — 60 s waiting for Connected, 90 s waiting for
+ * the first routed response, plus a probe that can still be in flight when that budget
+ * ends — so the class cap never masks the real failure with an opaque timeout.
+ */
+private const val TUNNEL_TEST_TIMEOUT_SECONDS = 240L
 
 /** Timeout waiting for the tunnel to connect (milliseconds). */
 private const val TUNNEL_CONNECT_TIMEOUT_MS = 60_000L
 
 /**
- * Deadline for the DNS-readiness poll before falling through to the fetch (milliseconds).
+ * Budget for the tunnel to start serving traffic, in milliseconds.
  *
- * Identical to the fixed 30 s wait this poll replaces, so a slow network is no less
- * likely to pass than before; the poll simply stops early once the host resolves.
+ * Covers what the previous code allowed after Connected: the unconditional 30 s wait plus
+ * five attempts with growing backoff (2+4+6+8+10 s of sleeps) and 10 s socket timeouts,
+ * i.e. at least 60 s of waiting before it gave up. A tunnel that is already routing is
+ * reached on the first probe, since [retryUntil] probes immediately; a tunnel that is not
+ * routable yet must never be given up on sooner than the code this replaced. Pinned by
+ * `RetryUntilTest`.
  */
-private const val DNS_READINESS_TIMEOUT_MS = 30_000L
+internal const val TUNNEL_READY_TIMEOUT_MS = 90_000L
 
 /**
- * Interval between DNS-readiness probes (milliseconds).
+ * Interval between tunnel probes (milliseconds).
  *
- * Matches the JVM's default negative-cache TTL (`networkaddress.cache.negative.ttl`,
- * 10 s), so a failed probe is never retried before its cached NXDOMAIN has expired.
+ * Long enough that polling a half-wired edge is cheap, short enough that a tunnel becoming
+ * routable mid-budget is noticed within seconds. It also has to stay below the JVM's
+ * positive DNS cache lifetime (`networkaddress.cache.ttl`, 30 s by default), so a
+ * resolution taken while the name is settling cannot pin a single answer for the whole
+ * budget.
  */
-private const val DNS_READINESS_POLL_INTERVAL_MS = 10_000L
+private const val TUNNEL_PROBE_INTERVAL_MS = 5_000L
 
 /**
  * Polls [condition] until it holds, or [timeoutMs] elapses.

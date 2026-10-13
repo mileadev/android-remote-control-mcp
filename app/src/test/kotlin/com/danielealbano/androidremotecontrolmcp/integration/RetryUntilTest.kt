@@ -9,14 +9,27 @@ import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Unit test for [retryUntil], the bounded poll behind the Cloudflare tunnel test's
- * DNS-readiness wait.
+ * Unit test for the Cloudflare tunnel test's retry policy: [retryUntil], the bounded poll
+ * the tunnel probe loop is built on, and the budget that loop is given.
  *
  * Pure timing logic only: the conditions are in-process counters, so this needs no
  * network and no `cloudflared`.
  */
 @DisplayName("RetryUntilTest")
 class RetryUntilTest {
+    @Test
+    fun `keeps at least the patience of the fixed wait and retry loop it replaced`() {
+        // The replaced code slept 30 s unconditionally, then made five attempts with
+        // 2+4+6+8+10 s of backoff: 60 s of waiting before it gave up, more if a connect
+        // timed out. CI caught the first version of the poll violating this: a poll that
+        // returns early leaves only the retry loop's budget, which was then ~30 s, and the
+        // tunnel was still unroutable (`Network is unreachable`) when that ran out.
+        assertTrue(TUNNEL_READY_TIMEOUT_MS >= 60_000L) {
+            "the tunnel-ready budget (${TUNNEL_READY_TIMEOUT_MS}ms) is smaller than the " +
+                "60s that the fixed wait plus five backed-off attempts allowed"
+        }
+    }
+
     @Test
     fun `returns true as soon as the condition holds`() {
         val probes = AtomicInteger()

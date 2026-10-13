@@ -224,10 +224,15 @@ of silently passing.
 #### The Cloudflare test polls instead of sleeping (finding 18)
 
 `CloudflareTunnelIntegrationTest` waited a fixed 30 s for DNS before reading the tunnel URL, which
-made the suite slow when the record was ready and still flaky when it was not. It now uses a bounded
-`retryUntil(timeoutMs, intervalMs, condition)` poll (10 s interval, matching the JVM's
-`networkaddress.cache.negative.ttl`), falling through to the real gate (`fetchUrlWithRetry`) on
-expiry, so the worst case is no worse than the old fixed wait. `RetryUntilTest` covers the helper.
+made the suite slow when the record was ready and still flaky when it was not. Both waits are now
+bounded polls built on `retryUntil(timeoutMs, intervalMs, condition)`: the DNS wait keeps the same
+30 s deadline at a 10 s interval (matching the JVM's `networkaddress.cache.negative.ttl`), and the
+fetch itself polls the tunnel every 3 s for 60 s, retrying the statuses and socket errors that only
+mean "the edge is not routing yet". The budgets are pinned by `RetryUntilTest`, because the sum they
+preserve is the point: the removed code waited 30 s and then retried for another 30 s, so a poll that
+returns early must not give up sooner than that. The first version of this change did — a CI run
+caught the tunnel still unroutable at 30 s with `Network is unreachable`, and the test has the full
+60 s of patience back.
 
 #### The dead surface is deleted (finding 19)
 
