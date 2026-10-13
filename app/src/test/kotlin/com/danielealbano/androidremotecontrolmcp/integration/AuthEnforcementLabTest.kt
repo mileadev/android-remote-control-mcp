@@ -1,6 +1,7 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerLogEntry
+import com.danielealbano.androidremotecontrolmcp.mcp.RequestOriginPolicy
 import com.danielealbano.androidremotecontrolmcp.mcp.installMcpBasePlugins
 import com.danielealbano.androidremotecontrolmcp.mcp.installMcpStatelessTransport
 import com.danielealbano.androidremotecontrolmcp.services.sharing.EphemeralFileLinkService
@@ -43,6 +44,13 @@ import org.junit.jupiter.api.Test
  */
 @DisplayName("Auth Enforcement Lab Tests")
 class AuthEnforcementLabTest {
+    /**
+     * The preflight origin must be centrally approved (H-01 contract: hardened builds deny any
+     * cross-origin that is not on the provisioned allowlist, so an unapproved Origin is never
+     * answered by CORS) — this constant is the allowlisted browser source for the preflight gate.
+     */
+    private val approvedPreflightOrigin = "http://localhost:6274"
+
     @BeforeEach
     fun setUp() {
         McpIntegrationTestHelper.mockAndroidLog()
@@ -199,7 +207,7 @@ class AuthEnforcementLabTest {
             withHardenedApplication(TOKEN_A) {
                 val preflight =
                     client.options("/mcp") {
-                        header(HttpHeaders.Origin, "http://localhost:6274")
+                        header(HttpHeaders.Origin, approvedPreflightOrigin)
                         header(HttpHeaders.AccessControlRequestMethod, "POST")
                     }
 
@@ -252,7 +260,15 @@ class AuthEnforcementLabTest {
         val sdkServer = McpIntegrationTestHelper.createSdkServer(deps)
         testApplication {
             application {
-                installMcpBasePlugins {
+                installMcpBasePlugins(
+                    configureOriginPolicy = {
+                        policy =
+                            RequestOriginPolicy.create(
+                                isLabHardened = true,
+                                approvedOrigins = setOf(approvedPreflightOrigin),
+                            )
+                    },
+                ) {
                     bearerTokenEnabled = true
                     this.expectedToken = expectedToken
                     oauthEnabled = false
