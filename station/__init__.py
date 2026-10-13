@@ -7,8 +7,8 @@ control-plane contract:
 - explicit device serial allowlist and enrollment with operator approval
   (`registry`);
 - exclusive, generation-fenced, expiring device leases (`leases`);
-- ADB access control: read-only inventory commands, forward-port registry
-  with collision checks, forbidden-port enforcement (`adb_access`);
+- ADB access control: read-only, allowlisted inventory commands behind the
+  enrolled-serial policy (`adb_access`);
 - typed device drivers behind a narrow interface (`drivers`);
 - the broker that independently validates leases/tool policy regardless of
   gateway claims (`broker`);

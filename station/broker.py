@@ -72,8 +72,6 @@ ROLE_FOR_OPERATION = {
 
 UNSUPPORTED_AT_STATION = frozenset({"android.video.session", "android.logs.query"})
 
-DEVICE_SCOPED_OPERATIONS = frozenset(KNOWN_OPERATIONS) - {"android.api.describe"}
-
 LEASE_REQUIRED_OPERATIONS = frozenset(
     {
         "android.ui.observe",

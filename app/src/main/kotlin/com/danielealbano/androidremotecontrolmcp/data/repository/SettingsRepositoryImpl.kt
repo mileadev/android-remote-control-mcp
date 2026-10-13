@@ -64,7 +64,6 @@ private val CLOUDFLARE_TUNNEL_MODE_KEY = stringPreferencesKey("cloudflare_tunnel
 private val CLOUDFLARE_TUNNEL_TOKEN_KEY = stringPreferencesKey("cloudflare_tunnel_token")
 private val CLOUDFLARE_TUNNEL_EXTRA_ARGS_KEY = stringPreferencesKey("cloudflare_tunnel_extra_args")
 private val FILE_SIZE_LIMIT_KEY = intPreferencesKey("file_size_limit_mb")
-private val ALLOW_HTTP_DOWNLOADS_KEY = booleanPreferencesKey("allow_http_downloads")
 private val DOWNLOAD_TIMEOUT_KEY = intPreferencesKey("download_timeout_seconds")
 private val DEVICE_SLUG_KEY = stringPreferencesKey("device_slug")
 private val TOOL_PERMISSIONS_KEY = stringPreferencesKey("tool_permissions")
@@ -173,7 +172,6 @@ private fun mapPreferencesToServerConfig(
             },
         cloudflareTunnelExtraArgs = prefs[CLOUDFLARE_TUNNEL_EXTRA_ARGS_KEY] ?: "",
         fileSizeLimitMb = prefs[FILE_SIZE_LIMIT_KEY] ?: ServerConfig.DEFAULT_FILE_SIZE_LIMIT_MB,
-        allowHttpDownloads = prefs[ALLOW_HTTP_DOWNLOADS_KEY] ?: false,
         downloadTimeoutSeconds =
             prefs[DOWNLOAD_TIMEOUT_KEY]
                 ?: ServerConfig.DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
@@ -666,14 +664,6 @@ class SettingsRepositoryImpl
                     ),
                 )
             }
-
-        override suspend fun updateAllowHttpDownloads(enabled: Boolean) {
-            dataStore.edit { prefs ->
-                val old = prefs[ALLOW_HTTP_DOWNLOADS_KEY] ?: false
-                prefs[ALLOW_HTTP_DOWNLOADS_KEY] = enabled
-                logToggle("allow_http_downloads", old, enabled, "HTTP downloads", "allowed", "disallowed")
-            }
-        }
 
         override suspend fun updateDownloadTimeout(seconds: Int) =
             logScalarChange(

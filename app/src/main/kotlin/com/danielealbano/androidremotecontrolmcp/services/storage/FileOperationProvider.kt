@@ -184,9 +184,8 @@ interface FileOperationProvider {
      * Creates the file and parent directories if they don't exist. Overwrites
      * existing content. Subject to the configured file size limit.
      *
-     * Respects user-configured settings:
-     * - Non-HTTPS URLs are always rejected with ActionFailed; plain HTTP downloads are not
-     *   supported, so `ServerConfig.allowHttpDownloads` no longer affects this call.
+     * Downloads are unconditionally HTTPS-only: non-HTTPS URLs are always rejected with
+     * ActionFailed, and HTTPS connections keep full certificate and hostname validation.
      *
      * Uses the user-configured download timeout. Follows HTTP redirects.
      *

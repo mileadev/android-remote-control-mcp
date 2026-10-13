@@ -1,4 +1,4 @@
-"""Station-side ADB access control: read-only inventory allowlist + port forwards.
+"""Station-side ADB access control: read-only inventory allowlist.
 
 Ported from the handoff's ``android_capability_probe.py`` and hardened:
 
@@ -6,8 +6,8 @@ Ported from the handoff's ``android_capability_probe.py`` and hardened:
   auto-selection, wildcards, and mDNS discovery are refused.
 * Only a fixed set of read-only commands is permitted. There is no path to
   ``adb tcpip``, ``adb root``, installs, or arbitrary shell input.
-* ADB ports 5037/5555 are never exposed; local forward slots are loopback-only
-  bookkeeping with device-unique host ports and collision detection.
+* No port forwarding: this module never builds, exposes, or bookkeeps an ADB
+  forward slot.
 * All subprocess execution uses ``shell=False`` with an argv list; timeouts are
    bounded to 1..30 seconds.
 """
@@ -18,7 +18,6 @@ import re
 import subprocess
 from typing import Callable
 
-from station.lab_policy import FORBIDDEN_ADB_PORTS
 from station.registry import DeviceRegistry, SERIAL_PATTERN
 
 PROP_KEYS = (
@@ -39,10 +38,6 @@ ADDITIONAL = (
 )
 
 RunFn = Callable[[list[str], int], tuple[int, str, str]]
-
-FORWARD_BIND_HOST = "127.0.0.1"
-_FORWARD_PORT_MIN = 1024
-_FORWARD_PORT_MAX = 65535
 
 
 class AdbPolicyError(RuntimeError):
@@ -220,85 +215,3 @@ def _query(argv: list[str], runner: RunFn, timeout: int) -> tuple[str | None, st
     if code != 0:
         return None, f"status {code}: {err[:160].strip() or 'query unsupported'}"
     return out.strip(), None
-
-
-class ForwardPolicyError(RuntimeError):
-    """Fail-closed forward mapping violation."""
-
-
-class ForwardRegistry:
-    """Per-station, loopback-only, device-unique local port forward bookkeeping."""
-
-    def __init__(self, registry: DeviceRegistry) -> None:
-        self._registry = registry
-        self._by_device: dict[str, dict[int, str]] = {}
-        self._by_port: dict[int, str] = {}
-
-    def _validate_device(self, device_id: str) -> None:
-        try:
-            self._registry.get(device_id)
-        except Exception as ex:
-            raise ForwardPolicyError(f"device {device_id!r} is not enrolled on this station: {ex}") from ex
-
-    @staticmethod
-    def _validate_forward_port(port: int, label: str) -> None:
-        if isinstance(port, bool) or not isinstance(port, int):
-            raise ForwardPolicyError(f"{label} must be an integer")
-        if not _FORWARD_PORT_MIN <= port <= _FORWARD_PORT_MAX:
-            raise ForwardPolicyError(f"{label} must be between {_FORWARD_PORT_MIN} and {_FORWARD_PORT_MAX}")
-        if port in FORBIDDEN_ADB_PORTS:
-            raise ForwardPolicyError(f"{label} {port} is reserved and must never be exposed")
-
-    @staticmethod
-    def _validate_target(target: str) -> int:
-        if not isinstance(target, str) or not target.startswith("tcp:"):
-            raise ForwardPolicyError("target must be of the form 'tcp:<device-local-port>'")
-        suffix = target[4:]
-        if not suffix.isdigit():
-            raise ForwardPolicyError("target port must be a decimal number")
-        port = int(suffix)
-        if not 1 <= port <= 65535:
-            raise ForwardPolicyError("target port must be between 1 and 65535")
-        if port in FORBIDDEN_ADB_PORTS:
-            raise ForwardPolicyError(f"target port {port} is a forbidden ADB port")
-        return port
-
-    def add(self, device_id: str, host_port: int, target: str) -> None:
-        self._validate_device(device_id)
-        self._validate_forward_port(host_port, "host_port")
-        self._validate_target(target)
-        forwards = self._by_device.setdefault(device_id, {})
-        existing = forwards.get(host_port)
-        if existing is not None:
-            if existing == target:
-                return  # idempotent re-add after restart
-            raise ForwardPolicyError(
-                f"device {device_id!r} already forwards host port {host_port} to {existing!r}"
-            )
-        other = self._by_port.get(host_port)
-        if other is not None and other != device_id:
-            raise ForwardPolicyError(
-                f"host port {host_port} is already mapped for device {other!r}; "
-                "host ports must be unique per device"
-            )
-        forwards[host_port] = target
-        self._by_port[host_port] = device_id
-
-    def remove(self, device_id: str, host_port: int) -> None:
-        forwards = self._by_device.get(device_id, {})
-        if host_port not in forwards:
-            raise ForwardPolicyError(f"no forward for device {device_id!r} on host port {host_port}")
-        del forwards[host_port]
-        if not forwards:
-            self._by_device.pop(device_id, None)
-        self._by_port.pop(host_port, None)
-
-    def remove_device(self, device_id: str) -> None:
-        for host_port in list(self._by_device.get(device_id, {})):
-            self.remove(device_id, host_port)
-
-    def get(self, device_id: str) -> dict[int, str]:
-        return dict(self._by_device.get(device_id, {}))
-
-    def snapshot(self) -> dict[str, dict[int, str]]:
-        return {device_id: dict(ports) for device_id, ports in sorted(self._by_device.items())}

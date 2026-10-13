@@ -123,7 +123,6 @@ class DeviceRegistry:
         self._approval = approval
         self._by_id: dict[str, Device] = {}
         self._by_serial: dict[str, str] = {}
-        self.fingerprint_by_device: dict[str, str] = {}
 
     @property
     def allowlist(self) -> Mapping[str, str]:
@@ -166,7 +165,6 @@ class DeviceRegistry:
         )
         self._by_id[device_id] = device
         self._by_serial[serial] = device_id
-        self.fingerprint_by_device[device_id] = hardware_fingerprint
         return device
 
     def _get(self, device_id: str | None) -> Device:

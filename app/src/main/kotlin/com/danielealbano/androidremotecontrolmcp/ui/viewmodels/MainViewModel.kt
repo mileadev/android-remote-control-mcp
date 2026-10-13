@@ -503,12 +503,6 @@ class MainViewModel
             }
         }
 
-        fun updateAllowHttpDownloads(enabled: Boolean) {
-            viewModelScope.launch(ioDispatcher) {
-                settingsRepository.updateAllowHttpDownloads(enabled)
-            }
-        }
-
         fun updateDeviceSlug(slug: String) {
             _deviceSlugInput.value = slug
 

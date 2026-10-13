@@ -17,8 +17,8 @@ import java.net.UnknownHostException
  * is attempted, and leave name-based host policy to [PolicyDns], which binds the allowlist
  * to the addresses OkHttp actually connects to (no DNS-rebinding TOCTOU window).
  *
- * Plain HTTP is no longer accepted, so [ServerConfig.allowHttpDownloads]
- * no longer influences downloads; HTTPS keeps full certificate and hostname verification.
+ * Plain HTTP is rejected outright (the download path is HTTPS-only and non-negotiable);
+ * HTTPS keeps full certificate and hostname verification.
  */
 internal object DownloadUrlValidator {
     /**

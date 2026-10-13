@@ -1,15 +1,12 @@
-"""Tests for ADB argv allowlisting, inventory collection and port forwards."""
+"""Tests for ADB argv allowlisting and inventory collection."""
 
 from __future__ import annotations
 
 import unittest
 
 from station.adb_access import (
-    FORWARD_BIND_HOST,
     AdbCommandPolicy,
     AdbPolicyError,
-    ForwardPolicyError,
-    ForwardRegistry,
     collect_inventory,
     parse_binder_services,
     parse_command_services,
@@ -200,71 +197,6 @@ class InventoryTest(unittest.TestCase):
         for bad in (0, 31, -1, 1.5, True, "3"):
             with self.assertRaises(ValueError):
                 collect_inventory("emulator-5554", self.policy, runner=self._runner, timeout=bad)
-
-
-class ForwardPolicyTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.approval = OperatorApproval(b"0123456789abcdef")
-        self.registry = DeviceRegistry(
-            {"emulator-5554": POLL, "emulator-5556": POLL}, self.approval
-        )
-        enroll_and_make_available(self.registry, self.approval, DEVICES["pixel"])
-        enroll_and_make_available(self.registry, self.approval, DEVICES["second"])
-        self.forwards = ForwardRegistry(self.registry)
-
-    def test_add_get_snapshot(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        self.assertEqual({18000: "tcp:8080"}, self.forwards.get("dev-pixel"))
-        self.assertEqual(
-            {"dev-pixel": {18000: "tcp:8080"}}, self.forwards.snapshot()
-        )
-        self.assertEqual(FORWARD_BIND_HOST, "127.0.0.1")
-
-    def test_forbidden_ports_refused_everywhere(self) -> None:
-        for host_port in (5037, 5555, 1019, 65536, 0, -1):
-            with self.assertRaises(ForwardPolicyError):
-                self.forwards.add("dev-pixel", host_port, "tcp:8080")
-        for target in ("tcp:5037", "tcp:5555", "tcp:0", "tcp:65536", "tcp:abc",
-                       "http:8080", "unix:/tmp/sock", "tcp:", "tcp:007x"):
-            with self.assertRaises(ForwardPolicyError):
-                self.forwards.add("dev-pixel", 18000, target)
-
-    def test_host_port_unique_across_devices(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        with self.assertRaisesRegex(ForwardPolicyError, "must be unique per device"):
-            self.forwards.add("dev-second", 18000, "tcp:9090")
-
-    def test_idempotent_re_add_same_target(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        self.assertEqual({18000: "tcp:8080"}, self.forwards.get("dev-pixel"))
-
-    def test_conflicting_re_add_refused(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        with self.assertRaisesRegex(ForwardPolicyError, "already forwards"):
-            self.forwards.add("dev-pixel", 18000, "tcp:9090")
-
-    def test_remove_and_remove_device(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        self.forwards.add("dev-pixel", 18001, "tcp:8081")
-        self.forwards.remove("dev-pixel", 18001)
-        self.assertEqual({18000: "tcp:8080"}, self.forwards.get("dev-pixel"))
-        self.forwards.remove_device("dev-pixel")
-        self.assertEqual({}, self.forwards.get("dev-pixel"))
-        with self.assertRaises(ForwardPolicyError):
-            self.forwards.remove("dev-second", 18000)
-
-    def test_forward_requires_enrolled_device(self) -> None:
-        with self.assertRaisesRegex(ForwardPolicyError, "not enrolled"):
-            self.forwards.add("dev-unknown", 18000, "tcp:8080")
-
-    def test_multiple_devices_own_ports(self) -> None:
-        self.forwards.add("dev-pixel", 18000, "tcp:8080")
-        self.forwards.add("dev-second", 18001, "tcp:8080")
-        self.assertEqual(
-            {"dev-pixel": {18000: "tcp:8080"}, "dev-second": {18001: "tcp:8080"}},
-            self.forwards.snapshot(),
-        )
 
 
 if __name__ == "__main__":
