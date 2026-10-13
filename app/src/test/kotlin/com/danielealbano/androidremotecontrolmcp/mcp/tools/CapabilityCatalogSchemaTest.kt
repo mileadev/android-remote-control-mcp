@@ -2,20 +2,34 @@ package com.danielealbano.androidremotecontrolmcp.mcp.tools
 
 import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermission
 import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermissions
+import com.danielealbano.androidremotecontrolmcp.integration.McpIntegrationTestHelper
+import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 @DisplayName("CapabilityCatalog schema, integrity and revision")
 class CapabilityCatalogSchemaTest {
+    @BeforeEach
+    fun setUp() {
+        McpIntegrationTestHelper.mockAndroidLog()
+    }
+
+    @AfterEach
+    fun tearDown() {
+        McpIntegrationTestHelper.unmockAndroidLog()
+    }
+
     private fun validEntry(
         toolName: String = "tap",
         apiId: String = "android.ui.tap.v1",
@@ -150,10 +164,24 @@ class CapabilityCatalogSchemaTest {
     }
 
     @Test
-    fun `device catalog covers exactly the registered tool surface`() {
+    fun `live registration matches the device catalog`() {
+        // The surface the server actually registers (production registerXxxTools entry points driven
+        // with mocked collaborators), checked against the catalog exactly as production does at
+        // startup. A tool added to registration without a catalog entry is fatal in production, so
+        // it must be fatal here; the only tolerated catalog excess is the flavour gate.
         val catalog = CapabilityCatalog.deviceCatalog()
-        assertEquals(DEVICE_ENTRY_TOOL_NAMES, catalog.toolNames)
-        assertEquals(DEVICE_ENTRY_TOOL_NAMES.size, catalog.apiIds.size)
+        val report = catalog.checkRegisteredToolNames(McpIntegrationTestHelper.registeredToolNames())
+
+        assertTrue(
+            report.missingCatalogEntries.isEmpty(),
+            "registered tools with no catalog entry (fatal in production): ${report.missingCatalogEntries}",
+        )
+        assertEquals(
+            ExpectedToolSurface.flavourGatedOff,
+            report.unregisteredCatalogEntries,
+            "only the flavour-gated entries may be catalog-listed but unregistered",
+        )
+        assertEquals(catalog.apiIds.size, catalog.toolNames.size, "catalog api ids and tool names must pair up")
     }
 
     @Test
@@ -229,96 +257,22 @@ class CapabilityCatalogSchemaTest {
     @Test
     fun `gated-off surfaces report drift that is not fatal`() {
         // The gate that consumes this lives in McpServerService.registerAllTools, which needs
-        // Hilt/Context and is jacoco-excluded, so it cannot be exercised here. What is pinned is
-        // the data invariant the gate relies on: the two ways LAB_HARDENED shrinks the registered
-        // surface (download_from_url gated off in FileTools, a denylist-shaped config denying
-        // every tool) produce unregistered catalog entries only, never missing ones. Only a
-        // registered tool without a catalog entry is fatal.
+        // Hilt/Context and is jacoco-excluded; `live registration matches the device catalog` above
+        // exercises the same check over the registered surface. What is pinned here is the data
+        // invariant the gate relies on: the two ways LAB_HARDENED shrinks the registered surface
+        // (the download tool gated off in FileTools, a denylist-shaped config denying every tool)
+        // produce unregistered catalog entries only, never missing ones. Only a registered tool
+        // without a catalog entry is fatal.
         val catalog = CapabilityCatalog.deviceCatalog()
+        val gatedOffTool = DownloadFromUrlHandler.TOOL_NAME
+        assertTrue(catalog.toolNames.contains(gatedOffTool), "the flavour-gated tool must be catalog-listed")
 
-        val gatedOff = catalog.checkRegisteredToolNames(DEVICE_ENTRY_TOOL_NAMES - "download_from_url")
+        val gatedOff = catalog.checkRegisteredToolNames(catalog.toolNames - gatedOffTool)
         assertFalse(gatedOff.intact, "drift is still recorded")
         assertTrue(gatedOff.missingCatalogEntries.isEmpty(), "a gated-off catalog entry is not fatal")
-        assertEquals(setOf("download_from_url"), gatedOff.unregisteredCatalogEntries)
+        assertEquals(setOf(gatedOffTool), gatedOff.unregisteredCatalogEntries)
 
         val deniedAll = catalog.checkRegisteredToolNames(emptyList())
         assertTrue(deniedAll.missingCatalogEntries.isEmpty(), "an empty hardened surface is not fatal")
-    }
-
-    private companion object {
-        /** Every tool the device registers must have exactly one catalog entry. */
-        val DEVICE_ENTRY_TOOL_NAMES: Set<String> =
-            setOf(
-                // Touch + gesture actions.
-                "tap",
-                "double_tap",
-                "long_press",
-                "swipe",
-                "scroll",
-                "pinch",
-                "custom_gesture",
-                // Global system actions.
-                "press_back",
-                "press_home",
-                "press_recents",
-                "open_notifications",
-                "open_quick_settings",
-                "dismiss_keyboard",
-                // Node actions and introspection.
-                "find_nodes",
-                "click_node",
-                "long_click_node",
-                "tap_node",
-                "scroll_to_node",
-                "get_node_details",
-                "wait_for_node",
-                "wait_for_idle",
-                // Text input.
-                "type_insert_text",
-                "type_append_text",
-                "type_replace_text",
-                "type_clear_text",
-                "press_key",
-                // Screen state.
-                "get_screen_state",
-                // Clipboard.
-                "get_clipboard",
-                "set_clipboard",
-                // Files.
-                "list_storage_locations",
-                "list_files",
-                "read_file",
-                "write_file",
-                "append_file",
-                "file_replace",
-                "delete_file",
-                "download_from_url",
-                // Apps.
-                "list_apps",
-                "open_app",
-                "close_app",
-                // Camera.
-                "list_cameras",
-                "list_camera_photo_resolutions",
-                "list_camera_video_resolutions",
-                "take_camera_photo",
-                "save_camera_photo",
-                "save_camera_video",
-                // Intents.
-                "send_intent",
-                "open_uri",
-                // Notifications.
-                "notification_list",
-                "notification_open",
-                "notification_dismiss",
-                "notification_snooze",
-                "notification_action",
-                "notification_reply",
-                // Location.
-                "get_location",
-                // Sharing.
-                "get_shared_content",
-                "share_file_via_web",
-            )
     }
 }

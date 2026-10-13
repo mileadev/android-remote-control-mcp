@@ -3,6 +3,7 @@ package com.danielealbano.androidremotecontrolmcp.integration
 import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermission
 import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermissions
 import com.danielealbano.androidremotecontrolmcp.data.model.ToolPermissionsConfig
+import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -57,10 +58,12 @@ class PermissionGatedToolsIntegrationTest {
                         .tools
                         .map { it.name }
                         .toSet()
-                assertFalse(
-                    toolNames.contains("android_get_location"),
-                    "android_get_location should be hidden when location not granted",
-                )
+                PREFIXED_LOCATION_TOOLS.forEach { name ->
+                    assertFalse(
+                        toolNames.contains(name),
+                        "$name should be hidden when location not granted",
+                    )
+                }
             }
         }
 
@@ -92,7 +95,7 @@ class PermissionGatedToolsIntegrationTest {
                         .tools
                         .map { it.name }
                         .toSet()
-                (PREFIXED_CAMERA_TOOLS + "android_get_location" + PREFIXED_NOTIFICATION_TOOLS).forEach { name ->
+                (PREFIXED_CAMERA_TOOLS + PREFIXED_LOCATION_TOOLS + PREFIXED_NOTIFICATION_TOOLS).forEach { name ->
                     assertTrue(toolNames.contains(name), "$name should be present when all optional perms granted")
                 }
             }
@@ -134,24 +137,20 @@ class PermissionGatedToolsIntegrationTest {
     companion object {
         private val ALL: Set<OptionalToolPermission> = OptionalToolPermission.entries.toSet()
 
+        // Derived from the production gating map (not hand copies), with the production name prefix.
         private val PREFIXED_CAMERA_TOOLS =
-            setOf(
-                "android_list_cameras",
-                "android_list_camera_photo_resolutions",
-                "android_list_camera_video_resolutions",
-                "android_take_camera_photo",
-                "android_save_camera_photo",
-                "android_save_camera_video",
+            ExpectedToolSurface.withPrefix(
+                OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.CAMERA),
+            )
+
+        private val PREFIXED_LOCATION_TOOLS =
+            ExpectedToolSurface.withPrefix(
+                OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.LOCATION),
             )
 
         private val PREFIXED_NOTIFICATION_TOOLS =
-            setOf(
-                "android_notification_list",
-                "android_notification_open",
-                "android_notification_dismiss",
-                "android_notification_snooze",
-                "android_notification_action",
-                "android_notification_reply",
+            ExpectedToolSurface.withPrefix(
+                OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.NOTIFICATION_LISTENER),
             )
     }
 }

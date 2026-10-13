@@ -245,7 +245,11 @@ object McpIntegrationTestHelper {
     }
 
     /**
-     * Registers all MCP tools with the given [Server] using mocked dependencies.
+     * Registers all MCP tools with the given [Server] using mocked dependencies: the production
+     * `registerXxxTools` entry points, so the registered surface is the production one for the
+     * current flavour and [perms].
+     *
+     * @return the un-prefixed names registered, as production's catalog integrity check consumes them.
      */
     fun registerAllTools(
         server: Server,
@@ -253,7 +257,7 @@ object McpIntegrationTestHelper {
         deviceSlug: String = "",
         perms: ToolPermissionsConfig = ToolPermissionsConfig(),
         toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
-    ) {
+    ): Set<String> {
         val toolNamePrefix = McpToolUtils.buildToolNamePrefix(deviceSlug)
         val registrar = LoggedToolRegistrar(server, deps.serverLog, toolPolicyGate = toolPolicyGate)
         registerScreenIntrospectionTools(
@@ -283,6 +287,7 @@ object McpIntegrationTestHelper {
         registerGestureTools(registrar, deps.actionExecutor, toolNamePrefix, perms)
         registerInteractionToolBundle(registrar, deps, toolNamePrefix, perms)
         registerNonAccessibilityTools(registrar, deps, toolNamePrefix, perms)
+        return registrar.registeredToolNames()
     }
 
     private fun registerInteractionToolBundle(
@@ -391,24 +396,39 @@ object McpIntegrationTestHelper {
         perms: ToolPermissionsConfig = ToolPermissionsConfig(),
         toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
     ): Server {
-        val server =
-            Server(
-                serverInfo =
-                    Implementation(
-                        name = McpToolUtils.buildServerName(deviceSlug),
-                        version = "test",
-                    ),
-                options =
-                    ServerOptions(
-                        capabilities =
-                            ServerCapabilities(
-                                tools = ServerCapabilities.Tools(listChanged = false),
-                            ),
-                    ),
-            )
+        val server = buildSdkServer(deviceSlug)
         registerAllTools(server, deps, deviceSlug, perms, toolPolicyGate)
         return server
     }
+
+    /**
+     * The un-prefixed names the production registration path registers for the current flavour and
+     * [perms], obtained through the mocked collaborators (no Hilt/Context required). This is the
+     * input of the production capability-catalog integrity check
+     * ([com.danielealbano.androidremotecontrolmcp.mcp.tools.CapabilityCatalog.checkRegisteredToolNames]).
+     */
+    fun registeredToolNames(
+        deps: MockDependencies = createMockDependencies(),
+        deviceSlug: String = "",
+        perms: ToolPermissionsConfig = ToolPermissionsConfig(),
+        toolPolicyGate: ToolPolicyGate = ToolPolicyGate.INACTIVE,
+    ): Set<String> = registerAllTools(buildSdkServer(deviceSlug), deps, deviceSlug, perms, toolPolicyGate)
+
+    private fun buildSdkServer(deviceSlug: String): Server =
+        Server(
+            serverInfo =
+                Implementation(
+                    name = McpToolUtils.buildServerName(deviceSlug),
+                    version = "test",
+                ),
+            options =
+                ServerOptions(
+                    capabilities =
+                        ServerCapabilities(
+                            tools = ServerCapabilities.Tools(listChanged = false),
+                        ),
+                ),
+        )
 
     /**
      * Runs a test within a fully configured Ktor [testApplication] using the MCP SDK

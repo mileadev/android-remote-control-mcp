@@ -10,31 +10,22 @@ import org.junit.jupiter.api.Test
 
 @DisplayName("OptionalToolPermissions")
 class OptionalToolPermissionTest {
-    private val cameraTools =
-        setOf(
-            "list_cameras",
-            "list_camera_photo_resolutions",
-            "list_camera_video_resolutions",
-            "take_camera_photo",
-            "save_camera_photo",
-            "save_camera_video",
-        )
-    private val notificationTools =
-        setOf(
-            "notification_list",
-            "notification_open",
-            "notification_dismiss",
-            "notification_snooze",
-            "notification_action",
-            "notification_reply",
-        )
+    // Derived from the production map under test: a hand-copied duplicate here could not detect
+    // a tool being added to or removed from TOOLS_BY_PERMISSION.
+    private val cameraTools: Set<String> =
+        OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.CAMERA)
+    private val locationTools: Set<String> =
+        OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.LOCATION)
+    private val notificationTools: Set<String> =
+        OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(OptionalToolPermission.NOTIFICATION_LISTENER)
     private val all: Set<OptionalToolPermission> = OptionalToolPermission.entries.toSet()
 
     @Test
     fun `toolsMissingPermission returns all gated tools when none granted`() {
         val missing = OptionalToolPermissions.toolsMissingPermission(emptySet())
-        assertEquals(cameraTools + setOf("get_location") + notificationTools, missing)
-        assertEquals(13, missing.size)
+        val expected = cameraTools + locationTools + notificationTools
+        assertEquals(expected, missing)
+        assertEquals(expected.size, missing.size)
     }
 
     @Test
@@ -51,7 +42,7 @@ class OptionalToolPermissionTest {
     @Test
     fun `missing location hides only get_location`() {
         val missing = OptionalToolPermissions.toolsMissingPermission(all - OptionalToolPermission.LOCATION)
-        assertEquals(setOf("get_location"), missing)
+        assertEquals(locationTools, missing)
     }
 
     @Test

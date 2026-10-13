@@ -1,6 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
-import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
 import io.mockk.coEvery
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
@@ -36,11 +36,18 @@ class McpProtocolIntegrationTest {
         }
 
     @Test
-    fun `listTools returns all 57 registered tools`() =
+    fun `listTools returns exactly the registered tool surface`() =
         runTest {
             McpIntegrationTestHelper.withTestApplication { client, _ ->
                 val result = client.listTools()
-                assertEquals(EXPECTED_TOOL_COUNT, result.tools.size)
+                val expected = ExpectedToolSurface.prefixedToolNames()
+                val actual = result.tools.map { it.name }.toSet()
+                assertEquals(
+                    expected.size,
+                    result.tools.size,
+                    "live tool count drifted from the catalog: missing=${expected - actual}, " +
+                        "not catalogued=${actual - expected}",
+                )
             }
         }
 
@@ -73,12 +80,13 @@ class McpProtocolIntegrationTest {
                 val result = client.listTools()
                 val toolNames = result.tools.map { it.name }.toSet()
 
-                EXPECTED_TOOL_NAMES.forEach { expectedName ->
-                    assertTrue(
-                        toolNames.contains(expectedName),
-                        "Expected tool '$expectedName' not found in: $toolNames",
-                    )
-                }
+                assertEquals(
+                    ExpectedToolSurface.prefixedToolNames(),
+                    toolNames,
+                    "the live tool surface differs from the catalog-derived one: " +
+                        "missing=${ExpectedToolSurface.prefixedToolNames() - toolNames}, " +
+                        "not catalogued=${toolNames - ExpectedToolSurface.prefixedToolNames()}",
+                )
             }
         }
 
@@ -134,84 +142,4 @@ class McpProtocolIntegrationTest {
                 assertNotEquals(true, result.isError)
             }
         }
-
-    companion object {
-        // labHardened removes android_download_from_url from the registered tool set.
-        private val EXPECTED_TOOL_COUNT = if (BuildConfig.LAB_HARDENED) 56 else 57
-
-        private val EXPECTED_TOOL_NAMES =
-            setOf(
-                // Touch actions
-                "android_tap",
-                "android_long_press",
-                "android_double_tap",
-                "android_swipe",
-                "android_scroll",
-                // Gestures
-                "android_pinch",
-                "android_custom_gesture",
-                // Node actions
-                "android_find_nodes",
-                "android_click_node",
-                "android_long_click_node",
-                "android_tap_node",
-                "android_scroll_to_node",
-                // Screen introspection
-                "android_get_screen_state",
-                // System actions
-                "android_press_back",
-                "android_press_home",
-                "android_press_recents",
-                "android_open_notifications",
-                "android_open_quick_settings",
-                "android_dismiss_keyboard",
-                // Text input
-                "android_type_append_text",
-                "android_type_insert_text",
-                "android_type_replace_text",
-                "android_type_clear_text",
-                "android_press_key",
-                // Utility
-                "android_get_clipboard",
-                "android_set_clipboard",
-                "android_wait_for_node",
-                "android_wait_for_idle",
-                "android_get_node_details",
-                // File tools
-                "android_list_storage_locations",
-                "android_list_files",
-                "android_read_file",
-                "android_write_file",
-                "android_append_file",
-                "android_file_replace",
-                "android_download_from_url",
-                "android_delete_file",
-                // App management
-                "android_open_app",
-                "android_list_apps",
-                "android_close_app",
-                // Camera tools
-                "android_list_cameras",
-                "android_list_camera_photo_resolutions",
-                "android_list_camera_video_resolutions",
-                "android_take_camera_photo",
-                "android_save_camera_photo",
-                "android_save_camera_video",
-                // Intent tools
-                "android_send_intent",
-                "android_open_uri",
-                // Notification tools
-                "android_notification_list",
-                "android_notification_open",
-                "android_notification_dismiss",
-                "android_notification_snooze",
-                "android_notification_action",
-                "android_notification_reply",
-                // Location tools
-                "android_get_location",
-                // Sharing tools
-                "android_get_shared_content",
-                "android_share_file_via_web",
-            ).let { names -> if (BuildConfig.LAB_HARDENED) names - "android_download_from_url" else names }
-    }
 }
