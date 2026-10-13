@@ -2,6 +2,7 @@
 
 package com.danielealbano.androidremotecontrolmcp.mcp.tools
 
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
 import com.danielealbano.androidremotecontrolmcp.data.model.ToolPermissionsConfig
 import com.danielealbano.androidremotecontrolmcp.mcp.McpToolException
 import com.danielealbano.androidremotecontrolmcp.services.storage.FileOperationProvider
@@ -573,6 +574,8 @@ class FileReplaceHandler
 // download_from_url
 // ─────────────────────────────────────────────────────────────────────────────
 
+private const val DOWNLOAD_DISABLED_MESSAGE = "download_from_url is disabled in hardened lab builds"
+
 /**
  * MCP tool handler for `download_from_url`.
  *
@@ -590,15 +593,14 @@ class DownloadFromUrlHandler
         private val fileOperationProvider: FileOperationProvider,
     ) {
         @Suppress("TooGenericExceptionCaught", "SwallowedException")
-        suspend fun execute(arguments: JsonObject?): CallToolResult =
-            try {
+        suspend fun execute(arguments: JsonObject?): CallToolResult {
+            requireNotHardenedBuild()
+            return try {
                 val locationId = McpToolUtils.requireString(arguments, "location_id")
                 val path = McpToolUtils.requireString(arguments, "path")
                 val url = McpToolUtils.requireString(arguments, "url")
 
-                if (!url.lowercase().startsWith("http://") && !url.lowercase().startsWith("https://")) {
-                    throw McpToolException.InvalidParams("URL must use http:// or https:// scheme")
-                }
+                requireHttpUrlScheme(url)
 
                 val downloadedBytes = fileOperationProvider.downloadFromUrl(locationId, path, url)
 
@@ -612,6 +614,20 @@ class DownloadFromUrlHandler
                     "Failed to download file: ${e.message ?: "Unknown error"}",
                 )
             }
+        }
+
+        // The tool is not registered in hardened lab builds, but any direct dispatch is denied too.
+        private fun requireNotHardenedBuild() {
+            if (BuildConfig.LAB_HARDENED) {
+                throw McpToolException.PermissionDenied(DOWNLOAD_DISABLED_MESSAGE)
+            }
+        }
+
+        private fun requireHttpUrlScheme(url: String) {
+            if (!url.lowercase().startsWith("http://") && !url.lowercase().startsWith("https://")) {
+                throw McpToolException.InvalidParams("URL must use http:// or https:// scheme")
+            }
+        }
 
         fun register(
             registrar: LoggedToolRegistrar,
@@ -754,7 +770,7 @@ fun registerFileTools(
     if (perms.isToolEnabled(FileReplaceHandler.TOOL_NAME)) {
         FileReplaceHandler(fileOperationProvider).register(registrar, toolNamePrefix)
     }
-    if (perms.isToolEnabled(DownloadFromUrlHandler.TOOL_NAME)) {
+    if (!BuildConfig.LAB_HARDENED && perms.isToolEnabled(DownloadFromUrlHandler.TOOL_NAME)) {
         DownloadFromUrlHandler(fileOperationProvider).register(registrar, toolNamePrefix)
     }
     if (perms.isToolEnabled(DeleteFileHandler.TOOL_NAME)) {

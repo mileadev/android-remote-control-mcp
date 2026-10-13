@@ -392,7 +392,6 @@ class MediaStoreFileOperationsImpl
                 checkWritePermission(locationId)
 
                 val config = settingsRepository.getServerConfig()
-                val parsedUrl = parseAndValidateDownloadUrl(url, config)
                 val relativePath = buildRelativePathForDir(builtin, path)
                 val displayName = extractDisplayName(path)
                 val mimeType = MimeTypeUtils.guessMimeType(displayName)
@@ -410,7 +409,7 @@ class MediaStoreFileOperationsImpl
                     context.contentResolver.insert(collection.uri, values)
                         ?: throw McpToolException.ActionFailed("Failed to create download destination: $path")
 
-                downloader.downloadToPendingUri(insertUri, parsedUrl, url, config, "$locationId/$path")
+                downloader.downloadToPendingUri(insertUri, url, config, "$locationId/$path")
             }
 
         // ─── deleteFile ─────────────────────────────────────────────────────
