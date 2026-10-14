@@ -1,5 +1,6 @@
 package com.danielealbano.androidremotecontrolmcp.integration
 
+import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -36,7 +37,14 @@ class AuthIntegrationTest {
                 // If we get here, the SDK client connected successfully
                 // (initialize handshake completed with valid token)
                 val tools = client.listTools()
-                assertEquals(EXPECTED_TOOL_COUNT, tools.tools.size)
+                val toolNames = tools.tools.map { it.name }.toSet()
+                assertEquals(
+                    ExpectedToolSurface.prefixedToolNames(),
+                    toolNames,
+                    "the authenticated tool surface differs from the catalog-derived one: " +
+                        "missing=${ExpectedToolSurface.prefixedToolNames() - toolNames}, " +
+                        "not catalogued=${toolNames - ExpectedToolSurface.prefixedToolNames()}",
+                )
             }
         }
 
@@ -104,8 +112,4 @@ class AuthIntegrationTest {
                 assertEquals(HttpStatusCode.Unauthorized, response.status)
             }
         }
-
-    companion object {
-        private const val EXPECTED_TOOL_COUNT = 57
-    }
 }

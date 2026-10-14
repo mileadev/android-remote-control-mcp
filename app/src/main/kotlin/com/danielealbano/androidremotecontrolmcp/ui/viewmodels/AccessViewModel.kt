@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerConfig
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
 import com.danielealbano.androidremotecontrolmcp.di.IoDispatcher
+import com.danielealbano.androidremotecontrolmcp.startup.applyAuthModelMigration
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,7 +47,9 @@ class AccessViewModel
 
         init {
             viewModelScope.launch(ioDispatcher) {
-                settingsRepository.ensureAuthModelMigrated()
+                // Guarded so an unusable at-rest key cannot crash the screen; ordering is kept so
+                // the migration still runs before the config is read (audit finding 9).
+                applyAuthModelMigration(settingsRepository)
                 _publicUrlOverrideInput.value = settingsRepository.serverConfig.first().publicUrlOverride
                 settingsRepository.serverConfig.collect { _serverConfig.value = it }
             }

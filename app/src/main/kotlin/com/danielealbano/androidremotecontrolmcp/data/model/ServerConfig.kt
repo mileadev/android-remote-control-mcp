@@ -22,8 +22,6 @@ package com.danielealbano.androidremotecontrolmcp.data.model
  * @property cloudflareTunnelMode The Cloudflare tunnel mode (Free quick tunnel vs token-based named tunnel).
  * @property cloudflareTunnelToken The Cloudflare tunnel token (required when using token mode).
  * @property fileSizeLimitMb File size limit for file operations (in MB).
- * @property allowHttpDownloads Whether HTTP (non-HTTPS) downloads are allowed.
- * @property allowUnverifiedHttpsCerts Whether unverified HTTPS certs are accepted for downloads.
  * @property downloadTimeoutSeconds Download timeout in seconds.
  * @property deviceSlug Optional device identifier slug for tool name prefix
  *   (letters, digits, underscores; max 20 chars).
@@ -35,6 +33,11 @@ package com.danielealbano.androidremotecontrolmcp.data.model
  * @property publicUrlOverride Optional public base URL that pins the host used for OAuth metadata and
  *   share links (empty = auto-detect from the request).
  * @property hideFromRecents Whether to exclude the app from Android's Recent Apps / Overview screen.
+ * @property approvedOrigins Centrally provisioned allowlist of EXACT cross-origin request sources
+ *   (`scheme://host[:port]`, normalized) for the hardened lab build's Origin/Host enforcement
+ *   (see `com.danielealbano.androidremotecontrolmcp.mcp.RequestOriginPolicy`). Empty = deny all
+ *   cross-origin traffic (same-origin loopback and native clients still work). Ignored by the
+ *   permissive gms/foss flavors.
  */
 data class ServerConfig(
     val port: Int = DEFAULT_PORT,
@@ -53,8 +56,6 @@ data class ServerConfig(
     val cloudflareTunnelToken: String = "",
     val cloudflareTunnelExtraArgs: String = "",
     val fileSizeLimitMb: Int = DEFAULT_FILE_SIZE_LIMIT_MB,
-    val allowHttpDownloads: Boolean = false,
-    val allowUnverifiedHttpsCerts: Boolean = false,
     val downloadTimeoutSeconds: Int = DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
     val deviceSlug: String = "",
     val oauthEnabled: Boolean = true,
@@ -63,6 +64,7 @@ data class ServerConfig(
     val toolPermissionsConfig: ToolPermissionsConfig = ToolPermissionsConfig(),
     val privacyModeConfig: PrivacyModeConfig = PrivacyModeConfig(),
     val hideFromRecents: Boolean = false,
+    val approvedOrigins: Set<String> = emptySet(),
 ) {
     companion object {
         /** Default server port. */

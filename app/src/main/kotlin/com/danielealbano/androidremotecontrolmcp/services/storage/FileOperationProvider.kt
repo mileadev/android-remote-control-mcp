@@ -180,13 +180,12 @@ interface FileOperationProvider {
     ): FileReplaceResult
 
     /**
-     * Downloads a file from a URL and saves it to an authorized storage location.
+     * Downloads a file over HTTPS and saves it to an authorized storage location.
      * Creates the file and parent directories if they don't exist. Overwrites
      * existing content. Subject to the configured file size limit.
      *
-     * Respects user-configured settings:
-     * - If the URL is HTTP (not HTTPS) and `allowHttpDownloads` is false, throws ActionFailed.
-     * - If `allowUnverifiedHttpsCerts` is true, skips HTTPS certificate verification.
+     * Downloads are unconditionally HTTPS-only: non-HTTPS URLs are always rejected with
+     * ActionFailed, and HTTPS connections keep full certificate and hostname validation.
      *
      * Uses the user-configured download timeout. Follows HTTP redirects.
      *

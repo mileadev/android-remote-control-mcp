@@ -2197,14 +2197,14 @@ Downloads a file from a URL and saves it to a storage location.
 **Notes**:
 - Subject to file size limit, download timeout, and HTTP/HTTPS security settings configured in the app.
 - HTTP downloads (non-HTTPS) must be explicitly allowed in app settings.
-- Unverified HTTPS certificates must be explicitly allowed in app settings.
+- HTTPS certificate and hostname validation is always enforced; unverified certificates cannot be accepted (the legacy opt-in setting has been removed).
 - Parent directories are created automatically if they don't exist.
 
 **Error Cases** (returned as `CallToolResult(isError = true)`):
 - **Invalid params**: Missing `location_id`, `path`, or `url`; invalid URL format
 - **Invalid params**: File MIME type not accepted by the built-in storage location (e.g. writing a text file to `builtin:pictures`; error lists the accepted types)
 - **Permission denied**: Write not allowed
-- **Action failed**: Storage location not found, download failed (network error, timeout, HTTP error status), file exceeds size limit, HTTP not allowed, unverified HTTPS not allowed
+- **Action failed**: Storage location not found, download failed (network error, timeout, HTTP error status), file exceeds size limit, HTTP not allowed
 
 ---
 

@@ -296,7 +296,7 @@ The MCP server exposes 57 tools across 14 categories. For full JSON-RPC schemas,
 
 **Encoding**: All text operations use UTF-8.
 
-**Errors**: Returns `CallToolResult(isError = true)` if location not found, file not found, file exceeds size limit, or operation fails. `android_append_file` returns a hint to use `android_write_file` if the storage provider does not support append mode. `android_download_from_url` returns an error if HTTP downloads are disabled and the URL is HTTP, or if the download times out.
+**Errors**: Returns `CallToolResult(isError = true)` if location not found, file not found, file exceeds size limit, or operation fails. `android_append_file` returns a hint to use `android_write_file` if the storage provider does not support append mode. `android_download_from_url` returns an error if the URL is not HTTPS, or if the download times out.
 
 ### 9. App Management Tools (3 tools)
 
@@ -330,7 +330,7 @@ The MCP server exposes 57 tools across 14 categories. For full JSON-RPC schemas,
 
 **Extras type inference**: String values → `String`, integers fitting Int range → `Int`, integers exceeding Int range → `Long`, decimals → `Double`, booleans → `Boolean`, string arrays → `StringArrayList`. Use `extras_types` to override (supported: `"string"`, `"int"`, `"long"`, `"float"`, `"double"`, `"boolean"`).
 
-**Flags**: Resolved dynamically via `Intent::class.java.fields` reflection. `FLAG_ACTIVITY_NEW_TASK` auto-added for `type = "activity"`.
+**Flags**: Resolved through the typed `IntentFlagCatalog` in `services/adapters` — compile-time `Intent` constants (no runtime introspection); each flag is version-gated and refused with a typed `InvalidParams` error when the device API level predates it. `FLAG_ACTIVITY_NEW_TASK` auto-added for `type = "activity"`.
 
 **Errors**: Invalid type/component/flag → `McpToolException.InvalidParams`. No handler found / permission denied / background start restriction → `McpToolException.ActionFailed` with sanitized message.
 
@@ -563,6 +563,7 @@ HomeScreen contains a TopAppBar, then a scrollable layout with: ServerStatusCard
 ### Coverage
 
 - **Target**: Minimum 80% code coverage for unit tests (Jacoco, enforced via `jacocoTestCoverageVerification`)
+- **Enforced floor**: 75% instruction coverage, the gate actually applied by `jacocoTestCoverageVerification`. It sits deliberately below the ~83% measured for the `gmsDebug` suite so normal churn does not break the build.
 - **Report**: `make coverage` or `./gradlew jacocoTestReport`
 
 ### Continuous Testing
@@ -665,6 +666,8 @@ Tunnel architecture:
 
 **CORS (browser clients)**: The server sends permissive CORS (`Access-Control-Allow-Origin: *`, no credentials mode) so browser-based MCP clients (e.g. MCP Inspector) can complete the OAuth flow and `/mcp` exchange. This does not weaken authentication — `/mcp` still requires a bearer/OAuth token that a cross-origin page cannot obtain, and non-browser clients send no `Origin` so CORS is a no-op for them. **Trade-off**: the wildcard removes the browser same-origin barrier, so in OPEN mode (both auth methods disabled) on a network-reachable or DNS-rebindable binding, a malicious web page in the victim's browser could drive the tool surface. No `Origin`/`Host` allowlist is enforced because the device's public host is dynamic (changing IPs, Cloudflare/ngrok tunnels, `public_url_override`); any static allowlist would break remote access. Mitigation: stay on the loopback binding and keep at least one auth method enabled unless the network is trusted.
 
+**Origin/Host enforcement (labHardened build)**: The hardened distribution replaces the permissive wildcard with a strict origin policy (`mcp/RequestOriginPolicy.kt`, wired through `installMcpBasePlugins` and `configureCors`). Every request is evaluated against a centrally provisioned allowlist (`ServerConfig.approvedOrigins`, empty by default): the `Host` header must parse to an approved host (bracketed IPv6 kept canonical, trailing dots stripped, non-ASCII rejected), and a cross-origin `Origin` is denied by default unless it exactly matches an approved origin after canonicalization (scheme/host lowercased, one trailing dot stripped, default ports folded per RFC 3986). A request without an `Origin` (native MCP clients, curl) is allowed only after the host gate and remains subject to the bearer-auth gate; a valid bearer token never excuses an unapproved origin. `anyHost()` is forbidden in the hardened build and fails fast at server startup (`RequestOriginPolicy.create` throws on any malformed allowlist entry), the CORS predicate runs before auth so denied requests never reach the auth layer or the route handler (fail closed), and the wildcard is never emitted for cross-origin responses. GMS/FOSS builds keep the permissive wildcard behavior described above.
+
 ### Permission Security
 
 Only necessary permissions: `INTERNET`, `FOREGROUND_SERVICE`, `RECEIVE_BOOT_COMPLETED`, `QUERY_ALL_PACKAGES` (app listing), `KILL_BACKGROUND_PROCESSES` (app closing), `CAMERA` (camera tools, runtime), `RECORD_AUDIO` (video recording with audio, runtime), `ACCESS_FINE_LOCATION` (device location, runtime), `ACCESS_COARSE_LOCATION` (location fallback, declared), Accessibility Service (user-granted via Settings), SAF tree URI permissions (user-granted per storage location via system file picker). Display clear explanations before requesting.
@@ -705,8 +708,7 @@ MCP tools return data originating from the Android device (UI element text, cont
 - **ngrok Authtoken**: Empty (required when using ngrok)
 - **ngrok Domain**: Empty (auto-assigned when empty)
 - **File Size Limit**: 50 MB (range 1-500 MB, configurable via UI, applies to all file operations)
-- **Allow HTTP Downloads**: Disabled (must be explicitly enabled to allow non-HTTPS downloads)
-- **Allow Unverified HTTPS Certificates**: Disabled (must be explicitly enabled to accept self-signed/invalid certs for downloads)
+- **Downloads**: `android_download_from_url` is HTTPS-only and non-negotiable — plain HTTP URLs are always rejected with `ActionFailed`, and HTTPS keeps full certificate and hostname validation. There is no HTTP-download or unverified-certificate setting in the UI or the ADB configuration surface.
 - **Download Timeout**: 60 seconds (range 10-300 seconds, configurable via UI)
 - **Device Slug** (`String`, default: `""`): Optional device identifier used as part of the MCP tool name prefix. When empty, tools use the `android_` prefix. When set (e.g., `pixel7`), tools use `android_pixel7_` prefix. Valid characters: letters (a-z, A-Z), digits (0-9), underscores (_). Maximum length: 20 characters.
 

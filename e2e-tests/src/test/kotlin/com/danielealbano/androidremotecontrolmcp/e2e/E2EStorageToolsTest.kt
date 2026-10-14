@@ -24,8 +24,8 @@ import org.junit.jupiter.api.TestMethodOrder
 /**
  * E2E Tier 1 core storage suite: all 8 file tools against the real MediaProvider,
  * covering the regression classes of #154 (path filtering), #155 (multi-collection
- * DCIM/Pictures), #156 (recordings), permission/toggle states, downloads via the
- * host-side fixture server, and pagination.
+ * DCIM/Pictures), #156 (recordings), permission/toggle states, the HTTPS-only download
+ * URL policy against the host-side fixture server, and pagination.
  *
  * Tests are ordered (@Order = plan table row) because rows 12/13/16/17/18 form a
  * mutable-file chain on e2e-rt.txt.
@@ -59,7 +59,7 @@ class E2EStorageToolsTest {
         for (location in listOf(DOWNLOADS, PICTURES, DCIM, RECORDINGS, MUSIC)) {
             StorageE2E.configureStorageLocation(location, allowWrite = true, allowDelete = true)
         }
-        StorageE2E.configureDownloadSettings(10, allowHttp = true)
+        StorageE2E.configureDownloadSettings(10)
 
         fixtureServer.start()
         fixtureBaseUrl = fixtureServer.containerReachableBaseUrl()
@@ -93,15 +93,15 @@ class E2EStorageToolsTest {
         StorageE2E.removeFixtureTree("Music/Album")
         StorageE2E.removeFromDisk("Recordings/memo.m4a")
         StorageE2E.removeFromDisk("Download/seeded.txt")
-        // Owned leftovers from write/download tests (best-effort; some are deleted by tests)
-        StorageE2E.removeFromDisk("Download/e2e-dl.txt")
-        StorageE2E.removeFromDisk("Download/e2e-truncated.txt")
+        // Owned leftovers from write tests (best-effort; some are deleted by tests)
+        // The download_from_url rows are refusal-only: the hardened URL policy rejects
+        // every request, so no target file is ever created.
         StorageE2E.removeFromDisk("DCIM/e2e-shot.jpg")
         StorageE2E.scanVolume()
         for (location in listOf(DOWNLOADS, PICTURES, DCIM, RECORDINGS, MUSIC)) {
             StorageE2E.configureStorageLocation(location, allowWrite = false, allowDelete = false)
         }
-        StorageE2E.configureDownloadSettings(60, allowHttp = false)
+        StorageE2E.configureDownloadSettings(60)
     }
 
     // ─── shared helpers ─────────────────────────────────────────────────────
@@ -388,80 +388,97 @@ class E2EStorageToolsTest {
         assertEquals("line one\nline two", readFileContent(PICTURES, "readable.jpg"))
     }
 
+    // ─── download_from_url URL policy (H-04: downloads are HTTPS-only) ──────
+    //
+    // The fixture server is plain HTTP: the device can reach it, but the hardened URL
+    // policy refuses the request before a single byte is fetched. That is exactly what
+    // these rows assert on-device. Transport-level scenarios (200, 404, timeout,
+    // truncated stream, certificate mismatch) run against real TLS in the app-module
+    // integration test DownloadNetworkLabTest, which drives the production download
+    // engine, so they are not repeated here.
+
     @Test
     @Order(23)
-    fun `download_from_url downloads fixture file`() = runBlocking {
+    fun `download_from_url rejects plain HTTP even when the host is reachable`() = runBlocking {
         val result = mcpClient.callTool(
             "${TOOL_PREFIX}download_from_url",
-            mapOf("location_id" to DOWNLOADS, "path" to "e2e-dl.txt", "url" to "$fixtureBaseUrl/fixture.txt"),
+            mapOf("location_id" to DOWNLOADS, "path" to "e2e-http.txt", "url" to "$fixtureBaseUrl/fixture.txt"),
         )
-        assertNotEquals(true, result.isError, toolText(result))
-        assertEquals(FixtureHttpServer.FIXTURE_CONTENT, readFileContent(DOWNLOADS, "e2e-dl.txt"))
+        assertEquals(true, result.isError, toolText(result))
+        assertTrue(toolText(result).contains("Only HTTPS downloads are allowed"), toolText(result))
+        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-http.txt"))
     }
 
     @Test
     @Order(24)
-    fun `download_from_url 404 returns error and leaves no file`() = runBlocking {
-        val result = mcpClient.callTool(
-            "${TOOL_PREFIX}download_from_url",
-            mapOf("location_id" to DOWNLOADS, "path" to "e2e-404.txt", "url" to "$fixtureBaseUrl/missing.txt"),
-        )
-        assertEquals(true, result.isError)
-        assertFalse(
-            toolText(result).contains("not allowed", ignoreCase = true),
-            "must fail on the HTTP error, not the http-disabled gate: ${toolText(result)}",
-        )
-        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-404.txt"))
-    }
-
-    @Test
-    @Order(25)
-    fun `download_from_url connection refused returns error`() = runBlocking {
-        val refusedUrl = fixtureBaseUrl.replace(":${FixtureHttpServer.FIXTURE_HTTP_PORT}", ":18999")
-        val result = mcpClient.callTool(
-            "${TOOL_PREFIX}download_from_url",
-            mapOf("location_id" to DOWNLOADS, "path" to "e2e-refused.txt", "url" to "$refusedUrl/x.txt"),
-        )
-        assertEquals(true, result.isError)
-        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-refused.txt"))
-    }
-
-    @Test
-    @Order(26)
-    fun `download_from_url times out on slow server`() = runBlocking {
-        val start = System.currentTimeMillis()
-        val result = mcpClient.callTool(
-            "${TOOL_PREFIX}download_from_url",
-            mapOf("location_id" to DOWNLOADS, "path" to "e2e-slow.txt", "url" to "$fixtureBaseUrl/slow.txt"),
-        )
-        val elapsed = System.currentTimeMillis() - start
-        assertEquals(true, result.isError, toolText(result))
-        assertTrue(
-            elapsed < FixtureHttpServer.SLOW_DELAY_MS + 5_000,
-            "timeout must trigger before the slow endpoint responds (elapsed=${elapsed}ms)",
-        )
-        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-slow.txt"))
-    }
-
-    @Test
-    @Order(27)
-    fun `download_from_url handles truncated response`() = runBlocking<Unit> {
+    fun `download_from_url rejects embedded credentials`() = runBlocking {
         val result = mcpClient.callTool(
             "${TOOL_PREFIX}download_from_url",
             mapOf(
                 "location_id" to DOWNLOADS,
-                "path" to "e2e-truncated.txt",
-                "url" to "$fixtureBaseUrl/truncated.txt",
+                "path" to "e2e-credentials.txt",
+                "url" to "https://user:pass@download-e2e-fixture.invalid/e2e.txt",
             ),
         )
-        // Observed redroid 13 (API 33) and 14 (API 34) behavior — documents the platform, revisit on image upgrade:
-        // the mid-stream cut fails cleanly ("unexpected end of stream") and the pending
-        // MediaStore row is deleted — no partial file remains in the listing.
-        assertEquals(true, result.isError)
-        assertTrue(toolText(result).contains("unexpected end of stream"), toolText(result))
-        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-truncated.txt"))
-        // Server healthy afterwards
-        assertTrue(totalCount(callListFiles(DOWNLOADS)) >= 0)
+        assertEquals(true, result.isError, toolText(result))
+        assertTrue(toolText(result).contains("must not contain embedded credentials"), toolText(result))
+        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-credentials.txt"))
+    }
+
+    @Test
+    @Order(25)
+    fun `download_from_url blocks metadata loopback and private literals`() = runBlocking {
+        val blocked =
+            mapOf(
+                "e2e-metadata.txt" to "https://169.254.169.254/latest/meta-data/",
+                "e2e-loopback.txt" to "https://127.0.0.1/e2e.txt",
+                "e2e-private.txt" to "https://10.11.12.13/e2e.txt",
+            )
+        for ((path, url) in blocked) {
+            val result = mcpClient.callTool(
+                "${TOOL_PREFIX}download_from_url",
+                mapOf("location_id" to DOWNLOADS, "path" to path, "url" to url),
+            )
+            assertEquals(true, result.isError, "$url -> ${toolText(result)}")
+            assertTrue(toolText(result).contains("Download blocked"), toolText(result))
+            assertFalse(fileNames(callListFiles(DOWNLOADS)).contains(path), "leftover file: $path")
+        }
+    }
+
+    @Test
+    @Order(26)
+    fun `download_from_url rejects non-canonical numeric hosts`() = runBlocking {
+        for (url in listOf("https://2130706433/e2e.txt", "https://0177.0.0.1/e2e.txt")) {
+            val result = mcpClient.callTool(
+                "${TOOL_PREFIX}download_from_url",
+                mapOf("location_id" to DOWNLOADS, "path" to "e2e-numeric.txt", "url" to url),
+            )
+            assertEquals(true, result.isError, "$url -> ${toolText(result)}")
+            assertTrue(
+                toolText(result).contains("numeric download hosts must use canonical decimal dotted-quad IPv4"),
+                toolText(result),
+            )
+            assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-numeric.txt"))
+        }
+    }
+
+    @Test
+    @Order(27)
+    fun `download_from_url fails closed when the host does not resolve`() = runBlocking {
+        val result = mcpClient.callTool(
+            "${TOOL_PREFIX}download_from_url",
+            mapOf(
+                "location_id" to DOWNLOADS,
+                "path" to "e2e-unresolvable.txt",
+                "url" to "https://download-e2e-fixture.invalid/e2e.txt",
+            ),
+        )
+        assertEquals(true, result.isError, toolText(result))
+        // A resolver that reports NXDOMAIN gives "Download failed: …"; one that hijacks the name
+        // with a loopback/private answer gives "Download blocked: …". Both are fail-closed.
+        val text = toolText(result)
+        assertTrue(text.contains("Download failed") || text.contains("Download blocked"), text)
+        assertFalse(fileNames(callListFiles(DOWNLOADS)).contains("e2e-unresolvable.txt"))
     }
 
     @Test

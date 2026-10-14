@@ -12,7 +12,8 @@ package com.danielealbano.androidremotecontrolmcp.services.intents
  *   receiver in that app without needing the receiver's class name.
  * @property extras Key-value extras with auto type inference.
  * @property extrasTypes Explicit type overrides for extras keys.
- * @property flags Intent flag names resolved via reflection.
+ * @property flags Intent flag names resolved against the typed
+ *   `IntentFlagCatalog` (compile-time `Intent` constants, per-flag version-gated).
  */
 data class SendIntentRequest(
     val type: String,

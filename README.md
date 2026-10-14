@@ -339,7 +339,6 @@ The bearer token is shown in the app's connection info and can be copied directl
 | Remote Access Tunnel | Disabled | Expose server via public HTTPS URL (Cloudflare Quick Tunnels or ngrok) |
 | Tool Permissions | All enabled | Per-tool and per-parameter enable/disable (Settings > MCP Tools) |
 | File Size Limit | 50 MB | Maximum file size for file operations (range 1-500 MB) |
-| Allow HTTP Downloads | Disabled | Allow non-HTTPS downloads via `android_download_from_url` |
 | Download Timeout | 60 seconds | Timeout for file downloads (range 10-300 seconds) |
 
 ### Using with adb Port Forwarding
@@ -449,8 +448,6 @@ adb shell am broadcast \
   --es ngrok_authtoken "your-ngrok-token" \
   --es ngrok_domain "your-domain.ngrok-free.app" \
   --ei file_size_limit_mb 50 \
-  --ez allow_http_downloads false \
-  --ez allow_unverified_https_certs false \
   --ei download_timeout_seconds 60 \
   --es device_slug "pixel8" \
   --es tool_permissions '{"disabled_tools":["tap"],"disabled_params":{"swipe":["duration_ms"]}}'
@@ -488,8 +485,6 @@ Bearer enforcement is controlled by `--ez bearer_token_enabled <bool>`, NOT by c
 | `ngrok_authtoken` | string | ngrok authentication token |
 | `ngrok_domain` | string | ngrok custom domain (optional) |
 | `file_size_limit_mb` | int | Max file size for file operations (1-500) |
-| `allow_http_downloads` | boolean | Allow non-HTTPS downloads |
-| `allow_unverified_https_certs` | boolean | Allow unverified HTTPS certificates for downloads |
 | `download_timeout_seconds` | int | Download timeout (10-300) |
 | `device_slug` | string | Device identifier for tool name prefix |
 | `tool_permissions` | string (JSON) | Per-tool and per-parameter permissions: `{"disabled_tools":["tool_name"],"disabled_params":{"tool_name":["param"]}}` |

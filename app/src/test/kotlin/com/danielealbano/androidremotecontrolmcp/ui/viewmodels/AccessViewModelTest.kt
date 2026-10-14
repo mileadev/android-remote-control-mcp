@@ -1,7 +1,9 @@
 package com.danielealbano.androidremotecontrolmcp.ui.viewmodels
 
+import com.danielealbano.androidremotecontrolmcp.data.crypto.SecretCipherException
 import com.danielealbano.androidremotecontrolmcp.data.model.ServerConfig
 import com.danielealbano.androidremotecontrolmcp.data.repository.SettingsRepository
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -105,5 +107,21 @@ class AccessViewModelTest {
             viewModel.setPublicUrlOverride("not a url")
             assertTrue(viewModel.publicUrlOverrideError.value != null)
             coVerify(exactly = 0) { repository.updatePublicUrlOverride("not a url") }
+        }
+
+    @Test
+    @DisplayName("a failing at-rest migration does not crash the screen")
+    fun failingMigrationDoesNotCrash() =
+        runTest {
+            val failingRepository = mockk<SettingsRepository>(relaxed = true)
+            every { failingRepository.serverConfig } returns configFlow
+            coEvery { failingRepository.ensureAuthModelMigrated() } throws
+                SecretCipherException("at-rest key is unavailable")
+
+            AccessViewModel(failingRepository, testDispatcher)
+
+            // Reaching this point is the assertion: the guard absorbed the failure, so the screen
+            // is still constructible and usable on a device with an unusable at-rest key.
+            coVerify(exactly = 1) { failingRepository.ensureAuthModelMigrated() }
         }
 }

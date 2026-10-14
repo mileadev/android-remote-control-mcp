@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
+import com.danielealbano.androidremotecontrolmcp.BuildConfig
+import com.danielealbano.androidremotecontrolmcp.data.crypto.PlaintextSecretCipher
 import com.danielealbano.androidremotecontrolmcp.data.model.BindingAddress
 import com.danielealbano.androidremotecontrolmcp.data.model.BuiltinPermissions
 import com.danielealbano.androidremotecontrolmcp.data.model.CertificateSource
@@ -33,6 +35,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -81,6 +84,7 @@ class SettingsRepositoryImplTest {
                 dataStore,
                 changeLogger,
                 EventChannelSettingsImpl(dataStore, changeLogger),
+                PlaintextSecretCipher,
             )
     }
 
@@ -570,6 +574,7 @@ class SettingsRepositoryImplTest {
         @Test
         fun `updates ngrok authtoken`() =
             testScope.runTest {
+                assumeFalse(BuildConfig.LAB_HARDENED, "labHardened strips tunnel-credential persistence")
                 repository.updateNgrokAuthtoken("test-authtoken-abc123")
                 val config = repository.getServerConfig()
 
@@ -579,6 +584,7 @@ class SettingsRepositoryImplTest {
         @Test
         fun `reads persisted ngrok authtoken`() =
             testScope.runTest {
+                assumeFalse(BuildConfig.LAB_HARDENED, "labHardened strips tunnel-credential persistence")
                 repository.updateNgrokAuthtoken("persisted-token")
                 val config1 = repository.getServerConfig()
                 val config2 = repository.getServerConfig()
@@ -656,6 +662,7 @@ class SettingsRepositoryImplTest {
         @Test
         fun `persists token`() =
             testScope.runTest {
+                assumeFalse(BuildConfig.LAB_HARDENED, "labHardened strips tunnel-credential persistence")
                 repository.updateCloudflareTunnelToken("cf-token-xyz789")
                 val config = repository.getServerConfig()
 
@@ -1395,7 +1402,13 @@ class SettingsRepositoryImplTest {
                 repository.updateToolPermissionsConfig(ToolPermissionsConfig())
 
                 val result = repository.getServerConfig()
-                assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                if (BuildConfig.LAB_HARDENED) {
+                    // The denylist-shaped document is normalized to the deny-by-default
+                    // policy, which round-trips as the same fail-closed configuration.
+                    assertEquals(ToolPermissionsConfig.DENY_ALL, result.toolPermissionsConfig)
+                } else {
+                    assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                }
             }
 
         @Test
@@ -1406,7 +1419,12 @@ class SettingsRepositoryImplTest {
                 }
 
                 val result = repository.getServerConfig()
-                assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                if (BuildConfig.LAB_HARDENED) {
+                    // Hardened policy fails closed instead of falling back open.
+                    assertEquals(ToolPermissionsConfig.DENY_ALL, result.toolPermissionsConfig)
+                } else {
+                    assertEquals(ToolPermissionsConfig(), result.toolPermissionsConfig)
+                }
             }
 
         @Test

@@ -3,16 +3,28 @@ package com.danielealbano.androidremotecontrolmcp.services.intents
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
+import com.danielealbano.androidremotecontrolmcp.services.adapters.AdapterOutcome
+import com.danielealbano.androidremotecontrolmcp.services.adapters.FrameworkAdapterRegistry
+import com.danielealbano.androidremotecontrolmcp.services.adapters.IntentExtraValue
+import com.danielealbano.androidremotecontrolmcp.services.adapters.IntentFlagCatalog
+import com.danielealbano.androidremotecontrolmcp.services.adapters.IntentFrameworkAction
+import com.danielealbano.androidremotecontrolmcp.services.adapters.describe
 import com.danielealbano.androidremotecontrolmcp.utils.Logger
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 
+/**
+ * Dispatches intents and opens URIs by delegating to the typed framework adapter
+ * layer ([FrameworkAdapterRegistry]). Wire-facing request handling (type
+ * validation, component parsing, flag-name resolution, extra conversion) stays
+ * here; platform invocation and version/permission gating live in the adapter.
+ */
 class IntentDispatcherImpl
     @Inject
     constructor(
         @param:ApplicationContext private val context: Context,
+        private val frameworkAdapters: FrameworkAdapterRegistry,
     ) : IntentDispatcher {
         override suspend fun sendIntent(request: SendIntentRequest): Result<Unit> {
             if (request.type !in VALID_TYPES) {
@@ -24,14 +36,35 @@ class IntentDispatcherImpl
             }
 
             return try {
-                val intent = buildIntent(request)
-                when (request.type) {
-                    TYPE_ACTIVITY -> context.startActivity(intent)
-                    TYPE_BROADCAST -> context.sendBroadcast(intent)
-                    TYPE_SERVICE -> context.startService(intent)
+                val component = request.component?.let { parseComponent(it).getOrThrow() }
+                val flags = resolveFlags(request.flags.orEmpty()).getOrThrow()
+                val extras = buildExtras(request)
+                val action =
+                    IntentFrameworkAction.DispatchIntent(
+                        delivery = deliveryFor(request.type),
+                        intentAction = request.action,
+                        dataUri = request.data,
+                        component = component,
+                        packageName = request.packageName,
+                        extras = extras,
+                        flags = flags,
+                    )
+                when (val outcome = frameworkAdapters.dispatch(action)) {
+                    is AdapterOutcome.Completed -> {
+                        Logger.i(TAG, "Intent dispatched: type=${request.type}, action=${request.action}")
+                        Result.success(Unit)
+                    }
+
+                    is AdapterOutcome.Failed -> {
+                        Logger.w(TAG, "Intent dispatch failed: ${outcome.message}")
+                        Result.failure(IllegalArgumentException(outcome.message))
+                    }
+
+                    is AdapterOutcome.Rejected -> {
+                        Logger.w(TAG, "Intent dispatch rejected: ${outcome.rejection.describe()}")
+                        Result.failure(IllegalArgumentException(outcome.rejection.describe()))
+                    }
                 }
-                Logger.i(TAG, "Intent dispatched: type=${request.type}, action=${request.action}")
-                Result.success(Unit)
             } catch (e: ActivityNotFoundException) {
                 Logger.w(TAG, "No activity found to handle intent", e)
                 Result.failure(IllegalArgumentException("No activity found to handle intent"))
@@ -52,69 +85,34 @@ class IntentDispatcherImpl
             }
         }
 
-        private fun buildIntent(request: SendIntentRequest): Intent {
-            val intent = Intent()
-
-            if (request.action != null) {
-                intent.action = request.action
-            }
-
-            if (request.data != null) {
-                intent.data = Uri.parse(request.data)
-            }
-
-            if (request.component != null) {
-                intent.component = parseComponent(request.component).getOrThrow()
-            }
-
-            if (request.packageName != null) {
-                intent.setPackage(request.packageName)
-            }
-
-            applyFlags(intent, request)
-            request.extras?.forEach { (key, value) ->
-                putExtraWithInference(intent, key, value, request.extrasTypes?.get(key))
-            }
-            return intent
-        }
-
-        private fun applyFlags(
-            intent: Intent,
-            request: SendIntentRequest,
-        ) {
-            val allFlags = request.flags.orEmpty().toMutableList()
-            if (request.type == TYPE_ACTIVITY && FLAG_ACTIVITY_NEW_TASK !in allFlags) {
-                allFlags.add(FLAG_ACTIVITY_NEW_TASK)
-            }
-            if (allFlags.isNotEmpty()) {
-                intent.flags = resolveFlags(allFlags).getOrThrow()
-            }
-        }
-
         override suspend fun openUri(
             uri: String,
             packageName: String?,
             mimeType: String?,
         ): Result<Unit> =
             try {
-                val intent =
-                    if (mimeType != null) {
-                        Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(Uri.parse(uri), mimeType)
-                        }
-                    } else {
-                        Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                val outcome =
+                    frameworkAdapters.dispatch(
+                        IntentFrameworkAction.OpenUri(
+                            uri = uri,
+                            packageName = packageName,
+                            mimeType = mimeType,
+                        ),
+                    )
+                when (outcome) {
+                    is AdapterOutcome.Completed -> {
+                        Logger.i(TAG, "URI opened: ${truncateUri(uri)}")
+                        Result.success(Unit)
                     }
 
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    is AdapterOutcome.Failed -> {
+                        Result.failure(IllegalArgumentException(outcome.message))
+                    }
 
-                if (packageName != null) {
-                    intent.setPackage(packageName)
+                    is AdapterOutcome.Rejected -> {
+                        Result.failure(IllegalArgumentException(outcome.rejection.describe()))
+                    }
                 }
-
-                context.startActivity(intent)
-                Logger.i(TAG, "URI opened: ${truncateUri(uri)}")
-                Result.success(Unit)
             } catch (e: ActivityNotFoundException) {
                 Logger.w(TAG, "No app found to handle URI: ${truncateUri(uri)}", e)
                 Result.failure(IllegalArgumentException("No app found to handle URI"))
@@ -128,130 +126,47 @@ class IntentDispatcherImpl
                 Result.failure(IllegalStateException("Failed to open URI unexpectedly"))
             }
 
-        private fun putExtraWithInference(
-            intent: Intent,
-            key: String,
-            value: Any?,
-            typeOverride: String?,
-        ) {
-            try {
-                if (typeOverride != null) {
-                    putExtraWithTypeOverride(intent, key, value, typeOverride)
-                } else {
-                    putExtraWithAutoInference(intent, key, value)
-                }
-            } catch (
-                @Suppress("TooGenericExceptionCaught") e: Exception,
-            ) {
-                throw IllegalArgumentException("Failed to convert extra '$key': ${e.message}", e)
+        private fun deliveryFor(type: String): IntentFrameworkAction.Delivery =
+            when (type) {
+                TYPE_ACTIVITY -> IntentFrameworkAction.Delivery.ACTIVITY
+                TYPE_BROADCAST -> IntentFrameworkAction.Delivery.BROADCAST
+                else -> IntentFrameworkAction.Delivery.SERVICE
             }
+
+        private fun buildExtras(request: SendIntentRequest): Map<String, IntentExtraValue> {
+            val extras = request.extras.orEmpty()
+            if (extras.isEmpty()) {
+                return emptyMap()
+            }
+            val converted = LinkedHashMap<String, IntentExtraValue>(extras.size)
+            extras.forEach { (key, value) ->
+                try {
+                    val typeOverride = request.extrasTypes?.get(key)
+                    val typedExtra =
+                        if (typeOverride != null) {
+                            IntentExtraValue.fromOverride(key, value, typeOverride)
+                        } else {
+                            IntentExtraValue.fromInferred(key, value) ?: return@forEach
+                        }
+                    converted[key] = typedExtra
+                } catch (
+                    @Suppress("TooGenericExceptionCaught") e: Exception,
+                ) {
+                    throw IllegalArgumentException("Failed to convert extra '$key': ${e.message}", e)
+                }
+            }
+            return converted
         }
 
-        private fun putExtraWithTypeOverride(
-            intent: Intent,
-            key: String,
-            value: Any?,
-            typeOverride: String,
-        ) {
-            require(value != null) {
-                "Extra '$key' is null but type override '$typeOverride' requires a value"
-            }
-            when (typeOverride) {
-                "string" -> {
-                    intent.putExtra(key, value.toString())
-                }
-
-                "int" -> {
-                    intent.putExtra(key, (value as? Number)?.toInt() ?: value.toString().toInt())
-                }
-
-                "long" -> {
-                    intent.putExtra(key, (value as? Number)?.toLong() ?: value.toString().toLong())
-                }
-
-                "float" -> {
-                    intent.putExtra(key, (value as? Number)?.toFloat() ?: value.toString().toFloat())
-                }
-
-                "double" -> {
-                    intent.putExtra(key, (value as? Number)?.toDouble() ?: value.toString().toDouble())
-                }
-
-                "boolean" -> {
-                    val boolVal: Boolean = value as? Boolean ?: value.toString().toBooleanStrict()
-                    intent.putExtra(key, boolVal)
-                }
-
-                else -> {
-                    throw IllegalArgumentException(
-                        "Unsupported extras_types value: '$typeOverride'. " +
-                            "Supported: string, int, long, float, double, boolean",
-                    )
-                }
-            }
-        }
-
-        private fun putExtraWithAutoInference(
-            intent: Intent,
-            key: String,
-            value: Any?,
-        ) {
-            when {
-                value == null -> {
-                    return
-                }
-
-                value is String -> {
-                    intent.putExtra(key, value)
-                }
-
-                value is Boolean -> {
-                    intent.putExtra(key, value)
-                }
-
-                value is Number -> {
-                    putNumericExtra(intent, key, value)
-                }
-
-                value is List<*> && value.all { it is String } -> {
-                    intent.putExtra(key, ArrayList(value.filterIsInstance<String>()))
-                }
-
-                else -> {
-                    throw IllegalArgumentException(
-                        "Cannot infer extra type for key '$key': unsupported value type",
-                    )
-                }
-            }
-        }
-
-        private fun putNumericExtra(
-            intent: Intent,
-            key: String,
-            value: Number,
-        ) {
-            val doubleVal = value.toDouble()
-            if (doubleVal % 1.0 == 0.0) {
-                val longVal = value.toLong()
-                if (longVal in Int.MIN_VALUE..Int.MAX_VALUE) {
-                    intent.putExtra(key, longVal.toInt())
-                } else {
-                    intent.putExtra(key, longVal)
-                }
-            } else {
-                intent.putExtra(key, doubleVal)
-            }
-        }
-
-        private fun resolveFlags(flagNames: List<String>): Result<Int> {
-            var combined = 0
+        private fun resolveFlags(flagNames: List<String>): Result<List<IntentFlagCatalog>> {
+            val resolved = ArrayList<IntentFlagCatalog>(flagNames.size)
             for (name in flagNames) {
-                val flagValue =
-                    flagMap[name]
+                val flag =
+                    IntentFlagCatalog.find(name)
                         ?: return Result.failure(IllegalArgumentException("Unknown flag: '$name'"))
-                combined = combined or flagValue
+                resolved.add(flag)
             }
-            return Result.success(combined)
+            return Result.success(resolved)
         }
 
         private fun parseComponent(component: String): Result<ComponentName> {
@@ -281,14 +196,7 @@ class IntentDispatcherImpl
             private const val TYPE_ACTIVITY = "activity"
             private const val TYPE_BROADCAST = "broadcast"
             private const val TYPE_SERVICE = "service"
-            private const val FLAG_ACTIVITY_NEW_TASK = "FLAG_ACTIVITY_NEW_TASK"
             private val VALID_TYPES = setOf(TYPE_ACTIVITY, TYPE_BROADCAST, TYPE_SERVICE)
-
-            private val flagMap: Map<String, Int> by lazy {
-                Intent::class.java.fields
-                    .filter { it.name.startsWith("FLAG_") && it.type == Int::class.javaPrimitiveType }
-                    .associate { it.name to it.getInt(null) }
-            }
 
             private fun truncateUri(uri: String): String =
                 try {

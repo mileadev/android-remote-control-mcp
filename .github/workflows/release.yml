@@ -21,7 +21,7 @@ jobs:
     steps:
       # ── 1. Checkout with full history (needed for tag comparison) ──
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           submodules: true
@@ -37,7 +37,7 @@ jobs:
       # The CI build-release job is a per-flavor matrix, so the checks are named
       # "Build Release - GMS" and "Build Release - FOSS"; the regexp waits for both.
       - name: Wait for CI to pass
-        uses: lewagon/wait-on-check-action@v1.9.1
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.sha }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -95,18 +95,18 @@ jobs:
 
       # ── 5. Setup build toolchains (same as CI build-release job) ──
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
 
       # ── 6. Compile native dependencies (cached by submodule content) ──
       - name: Cache cloudflared Android native
         id: cache-cloudflared
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libcloudflared.so
@@ -115,7 +115,7 @@ jobs:
 
       - name: Cache ngrok-java Android native
         id: cache-ngrok-android
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             app/src/main/jniLibs/arm64-v8a/libngrok_java.so
@@ -126,13 +126,13 @@ jobs:
 
       - name: Set up Go
         if: steps.cache-cloudflared.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.25.6'
 
       - name: Set up Rust
         if: steps.cache-ngrok-android.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
@@ -149,7 +149,7 @@ jobs:
 
       # ── 7. Geolocation DB toolchain (generated at build time from DB-IP City Lite) ──
       - name: Set up Python (geolocation DB generator)
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -158,7 +158,7 @@ jobs:
         run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
 
       - name: Cache DB-IP source CSV
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .dbip-cache
           key: dbip-csv-${{ steps.dbip-month.outputs.month }}

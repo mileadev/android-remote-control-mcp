@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.danielealbano.androidremotecontrolmcp.data.crypto.PlaintextSecretCipher
 import com.danielealbano.androidremotecontrolmcp.data.model.GeofenceZone
 import com.danielealbano.androidremotecontrolmcp.testutil.RecordingServerLogRepository
 import io.mockk.every
@@ -170,7 +171,7 @@ class GeofenceConfigRepositoryTest {
             // A main event-channel write rewrites the shared blob WITHOUT the geofence field.
             val changeLogger = SettingsChangeLogger(RecordingServerLogRepository(), Dispatchers.Unconfined, 0L)
             val settingsRepository =
-                SettingsRepositoryImpl(dataStore, changeLogger, EventChannelSettingsImpl(dataStore, changeLogger))
+                SettingsRepositoryImpl(dataStore, changeLogger, EventChannelSettingsImpl(dataStore, changeLogger), PlaintextSecretCipher)
             settingsRepository.updateNotificationChannelEnabled(true)
 
             // The dedicated geofence key must be untouched — the zone survives.

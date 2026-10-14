@@ -1,0 +1,316 @@
+package com.danielealbano.androidremotecontrolmcp.mcp.tools
+
+import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermission
+import com.danielealbano.androidremotecontrolmcp.data.model.OptionalToolPermissions
+import com.danielealbano.androidremotecontrolmcp.integration.McpIntegrationTestHelper
+import com.danielealbano.androidremotecontrolmcp.testutil.ExpectedToolSurface
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertInstanceOf
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+
+@DisplayName("CapabilityCatalog schema, integrity and revision")
+class CapabilityCatalogSchemaTest {
+    @BeforeEach
+    fun setUp() {
+        McpIntegrationTestHelper.mockAndroidLog()
+    }
+
+    @AfterEach
+    fun tearDown() {
+        McpIntegrationTestHelper.unmockAndroidLog()
+    }
+
+    private fun validEntry(
+        toolName: String = "tap",
+        apiId: String = "android.ui.tap.v1",
+        adapterId: String = "action_executor_v1",
+    ): CapabilityEntry =
+        CapabilityEntry(
+            toolName = toolName,
+            apiId = apiId,
+            adapterId = adapterId,
+            privilegeTier = PrivilegeTier.T2_TEST,
+            risk = CapabilityRisk.MUTATING,
+        )
+
+    @Test
+    fun `valid entry passes schema validation`() {
+        val entry =
+            CapabilityEntry(
+                toolName = "download_from_url",
+                apiId = "android.file.download.v1",
+                adapterId = "file_operation_provider_v1",
+                privilegeTier = PrivilegeTier.T1_APP,
+                risk = CapabilityRisk.NETWORK,
+                requiredPermissions = listOf("android.permission.INTERNET"),
+                hardwareFeatures = listOf("android.hardware.location.gps"),
+            )
+
+        assertEquals("android.file.download.v1", entry.apiId)
+        assertEquals(33, entry.minApiLevel)
+        assertNull(entry.maxApiLevel)
+    }
+
+    @Test
+    fun `entry rejects malformed identifiers`() {
+        assertThrows<IllegalArgumentException> { validEntry(toolName = "Tap") }
+        assertThrows<IllegalArgumentException> { validEntry(toolName = "a") }
+        assertThrows<IllegalArgumentException> { validEntry(apiId = "ui.tap.v1") }
+        assertThrows<IllegalArgumentException> { validEntry(apiId = "android.Ui.Tap.v1") }
+        assertThrows<IllegalArgumentException> { validEntry(adapterId = "Action_Executor") }
+    }
+
+    @Test
+    fun `entry rejects platform, api level and schema revision violations`() {
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(platform = "linux")
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(minApiLevel = 0)
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(minApiLevel = 34, maxApiLevel = 33)
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(argumentSchemaRevision = "UPPER")
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(argumentSchemaRevision = "")
+        }
+    }
+
+    @Test
+    fun `entry rejects non-contract permission and hardware references`() {
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(requiredPermissions = listOf("android.permission.camera"))
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(requiredPermissions = listOf("CAMERA"))
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(hardwareFeatures = listOf("android.hardware.Camera"))
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(hardwareFeatures = listOf("android.sensor.camera"))
+        }
+    }
+
+    @Test
+    fun `verification evidence is all-or-nothing`() {
+        val evidence = CapabilityVerification("CapabilityCatalogSchemaTest", "sha256:abc", "2026-02-15T00:00:00Z")
+        val verified = validEntry().copy(deviceStatus = DeviceCapabilityStatus.VERIFIED, verification = evidence)
+        assertEquals(DeviceCapabilityStatus.VERIFIED, verified.deviceStatus)
+
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(deviceStatus = DeviceCapabilityStatus.VERIFIED)
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(
+                deviceStatus = DeviceCapabilityStatus.VERIFIED,
+                verification = CapabilityVerification("", "sha256:abc", "2026-02-15T00:00:00Z"),
+            )
+        }
+        assertThrows<IllegalArgumentException> {
+            validEntry().copy(verification = evidence)
+        }
+    }
+
+    @Test
+    fun `privilege tier and risk wire names round-trip`() {
+        PrivilegeTier.entries.forEach { tier -> assertEquals(tier, PrivilegeTier.fromWireName(tier.wireName)) }
+        assertNull(PrivilegeTier.fromWireName("T6_FUTURE"))
+        assertNull(PrivilegeTier.fromWireName("t1_app"))
+        CapabilityRisk.entries.forEach { risk -> CapabilityRisk.fromWireName(risk.wireName) }
+        assertNull(CapabilityRisk.fromWireName("unknown"))
+        DeviceCapabilityStatus.entries.forEach { status ->
+            assertEquals(status, DeviceCapabilityStatus.fromWireName(status.wireName))
+        }
+        assertNull(DeviceCapabilityStatus.fromWireName("unverified"))
+    }
+
+    @Test
+    fun `catalog rejects duplicate tool names and api ids`() {
+        val clash =
+            CapabilityEntry(
+                toolName = "tap_alias",
+                apiId = "android.ui.tap.v1",
+                adapterId = "action_executor_v1",
+                privilegeTier = PrivilegeTier.T2_TEST,
+                risk = CapabilityRisk.MUTATING,
+            )
+        assertThrows<IllegalArgumentException> { CapabilityCatalog.of(listOf(validEntry(), clash)) }
+
+        val secondTool =
+            CapabilityEntry(
+                toolName = "tap2",
+                apiId = "android.ui.tap2.v1",
+                adapterId = "action_executor_v1",
+                privilegeTier = PrivilegeTier.T2_TEST,
+                risk = CapabilityRisk.MUTATING,
+            )
+        assertThrows<IllegalArgumentException> {
+            CapabilityCatalog.of(listOf(validEntry(), secondTool.copy(apiId = "android.ui.tap.v1")))
+        }
+    }
+
+    @Test
+    fun `live registration matches the device catalog`() {
+        // The surface the server actually registers (production registerXxxTools entry points driven
+        // with mocked collaborators), checked against the catalog exactly as production does at
+        // startup. A tool added to registration without a catalog entry is fatal in production, so
+        // it must be fatal here; the only tolerated catalog excess is the flavour gate.
+        val catalog = CapabilityCatalog.deviceCatalog()
+        val report = catalog.checkRegisteredToolNames(McpIntegrationTestHelper.registeredToolNames())
+
+        assertTrue(
+            report.missingCatalogEntries.isEmpty(),
+            "registered tools with no catalog entry (fatal in production): ${report.missingCatalogEntries}",
+        )
+        assertEquals(
+            ExpectedToolSurface.flavourGatedOff,
+            report.unregisteredCatalogEntries,
+            "only the flavour-gated entries may be catalog-listed but unregistered",
+        )
+        assertEquals(catalog.apiIds.size, catalog.toolNames.size, "catalog api ids and tool names must pair up")
+    }
+
+    @Test
+    fun `device catalog cross-checks the optional permission gating surface`() {
+        val catalog = CapabilityCatalog.deviceCatalog()
+        val permissionKeyedTools =
+            OptionalToolPermissions.TOOLS_BY_PERMISSION.values
+                .flatten()
+                .toSet()
+        permissionKeyedTools.forEach { toolName -> assertTrue(catalog.toolNames.contains(toolName)) }
+
+        OptionalToolPermissions.TOOLS_BY_PERMISSION[OptionalToolPermission.CAMERA]!!.forEach { toolName ->
+            val entry = catalog.forTool(toolName)!!
+            assertTrue(entry.requiredPermissions.contains("android.permission.CAMERA"))
+        }
+        val locationEntry = catalog.forTool("get_location")!!
+        assertTrue(locationEntry.requiredPermissions.contains("android.permission.ACCESS_FINE_LOCATION"))
+
+        // The reverse direction, so a tool that gains a gated permission but is left out of the
+        // gating table fails here instead of reaching a device that never granted it. The
+        // notification tools declare no `requiredPermissions`, so only these two can be checked.
+        val gatedPermissions =
+            mapOf(
+                "android.permission.CAMERA" to OptionalToolPermission.CAMERA,
+                "android.permission.ACCESS_FINE_LOCATION" to OptionalToolPermission.LOCATION,
+            )
+        gatedPermissions.forEach { (permission, optionalPermission) ->
+            val gatingTable = OptionalToolPermissions.TOOLS_BY_PERMISSION.getValue(optionalPermission)
+            catalog.toolNames
+                .map { catalog.forTool(it)!! }
+                .filter { permission in it.requiredPermissions }
+                .forEach { entry ->
+                    assertTrue(
+                        gatingTable.contains(entry.toolName),
+                        "${entry.toolName} requires $permission but is not gated by $optionalPermission",
+                    )
+                }
+        }
+
+        // The same reverse check for the param-level gate: `save_camera_video` records audio by
+        // default (`optionalBoolean(arguments, "audio", true)`), so a tool that starts declaring
+        // RECORD_AUDIO without an entry in PARAMS_BY_PERMISSION would record it ungated.
+        val microphoneGatedTools =
+            OptionalToolPermissions.PARAMS_BY_PERMISSION
+                .getValue(OptionalToolPermission.MICROPHONE)
+                .keys
+        catalog.toolNames
+            .map { catalog.forTool(it)!! }
+            .filter { "android.permission.RECORD_AUDIO" in it.requiredPermissions }
+            .forEach { entry ->
+                assertTrue(
+                    microphoneGatedTools.contains(entry.toolName),
+                    "${entry.toolName} requires RECORD_AUDIO but has no microphone-gated parameter",
+                )
+            }
+    }
+
+    @Test
+    fun `revision is deterministic sha256 format`() {
+        val first = CapabilityCatalog.deviceCatalog().revision
+        val second = CapabilityCatalog.deviceCatalog().revision
+        assertEquals(first, second)
+        assertTrue(first.startsWith("sha256:"))
+        assertEquals("sha256:".length + 64, first.length)
+        assertTrue(first.drop("sha256:".length).all { it.isDigit() || it in 'a'..'f' })
+    }
+
+    @Test
+    fun `canonical document uses contract keys in sorted order`() {
+        val catalog = CapabilityCatalog.deviceCatalog()
+        val root = Json.parseToJsonElement(catalog.canonicalDocument()).jsonObject
+        assertTrue(root.containsKey("android.ui.tap.v1"))
+        val entryJson = root["android.ui.tap.v1"]!!.jsonObject
+        assertEquals(
+            listOf(
+                "adapter_id",
+                "api_id",
+                "argument_schema_revision",
+                "device_status",
+                "hardware_features",
+                "max_api_level",
+                "min_api_level",
+                "platform",
+                "privilege_tier",
+                "required_permissions",
+                "risk",
+                "verification",
+            ),
+            entryJson.keys.toList(),
+        )
+        assertEquals("T2_TEST", entryJson["privilege_tier"]!!.jsonPrimitive.content)
+        val document = catalog.canonicalDocument()
+        assertTrue(document.contains("\"android.ui.tap.v1\":{\"adapter_id\""))
+    }
+
+    @Test
+    fun `integrity report catalogs registration drift both ways`() {
+        val catalog = CapabilityCatalog.of(listOf(validEntry()))
+        val intact = catalog.checkRegisteredToolNames(listOf("tap"))
+        assertTrue(intact.intact)
+
+        val missing = catalog.checkRegisteredToolNames(listOf("tap", "unknown_tool"))
+        assertEquals(setOf("unknown_tool"), missing.missingCatalogEntries)
+        assertTrue(missing.unregisteredCatalogEntries.isEmpty())
+
+        val unregistered = catalog.checkRegisteredToolNames(emptyList())
+        assertTrue(unregistered.missingCatalogEntries.isEmpty())
+        assertEquals(setOf("tap"), unregistered.unregisteredCatalogEntries)
+    }
+
+    @Test
+    fun `gated-off surfaces report drift that is not fatal`() {
+        // The gate that consumes this lives in McpServerService.registerAllTools, which needs
+        // Hilt/Context and is jacoco-excluded; `live registration matches the device catalog` above
+        // exercises the same check over the registered surface. What is pinned here is the data
+        // invariant the gate relies on: the two ways LAB_HARDENED shrinks the registered surface
+        // (the download tool gated off in FileTools, a denylist-shaped config denying every tool)
+        // produce unregistered catalog entries only, never missing ones. Only a registered tool
+        // without a catalog entry is fatal.
+        val catalog = CapabilityCatalog.deviceCatalog()
+        val gatedOffTool = DownloadFromUrlHandler.TOOL_NAME
+        assertTrue(catalog.toolNames.contains(gatedOffTool), "the flavour-gated tool must be catalog-listed")
+
+        val gatedOff = catalog.checkRegisteredToolNames(catalog.toolNames - gatedOffTool)
+        assertFalse(gatedOff.intact, "drift is still recorded")
+        assertTrue(gatedOff.missingCatalogEntries.isEmpty(), "a gated-off catalog entry is not fatal")
+        assertEquals(setOf(gatedOffTool), gatedOff.unregisteredCatalogEntries)
+
+        val deniedAll = catalog.checkRegisteredToolNames(emptyList())
+        assertTrue(deniedAll.missingCatalogEntries.isEmpty(), "an empty hardened surface is not fatal")
+    }
+}

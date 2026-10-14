@@ -168,11 +168,6 @@ class E2EConfigReceiver : BroadcastReceiver() {
             settingsRepository.updateDownloadTimeout(downloadTimeout)
             Log.i(TAG, "Download timeout updated to $downloadTimeout s")
         }
-        if (intent.hasExtra(EXTRA_ALLOW_HTTP_DOWNLOADS)) {
-            val allowHttp = intent.getBooleanExtra(EXTRA_ALLOW_HTTP_DOWNLOADS, false)
-            settingsRepository.updateAllowHttpDownloads(allowHttp)
-            Log.i(TAG, "Allow HTTP downloads updated to $allowHttp")
-        }
     }
 
     private fun handleStartServer(context: Context) {
@@ -200,6 +195,5 @@ class E2EConfigReceiver : BroadcastReceiver() {
         private const val EXTRA_STORAGE_ALLOW_WRITE = "storage_allow_write"
         private const val EXTRA_STORAGE_ALLOW_DELETE = "storage_allow_delete"
         private const val EXTRA_DOWNLOAD_TIMEOUT_SECONDS = "download_timeout_seconds"
-        private const val EXTRA_ALLOW_HTTP_DOWNLOADS = "allow_http_downloads"
     }
 }

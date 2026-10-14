@@ -12,7 +12,7 @@
 - The mid-session permission-revoke lifecycle test IS included.
 
 **Key infrastructure facts (verified)**:
-- `E2EConfigReceiver` already supports `storage_location_id` + `storage_allow_write`/`storage_allow_delete` broadcast extras. This plan touches the `e2e-tests` module plus ONE debug-source-set addition (new `download_timeout_seconds` and `allow_http_downloads` extras in `E2EConfigReceiver` — required because `ServerConfig.allowHttpDownloads` defaults to `false` and `DownloadUrlValidator` rejects `http://` URLs before connecting, and because the default 60s download timeout would make the slow-endpoint test take >60s). The receiver lives in `app/src/debug` and is absent from the release APK. Main-source-set production code is untouched.
+- `E2EConfigReceiver` already supports `storage_location_id` + `storage_allow_write`/`storage_allow_delete` broadcast extras. This plan touches the `e2e-tests` module plus ONE debug-source-set addition (new `download_timeout_seconds` extra in `E2EConfigReceiver` — the download rows set it so a refused download cannot sit on the 60s default. The `allow_http_downloads` extra the receiver also carries is inert after H-04, which makes `DownloadUrlValidator` reject every `http://` URL before connecting, and no test sends it any more). The receiver lives in `app/src/debug` and is absent from the release APK. Main-source-set production code is untouched.
 - `AndroidContainerSetup.execAdb` is `private`; it becomes `internal` so the new storage helper can use it. App package in E2E is `com.danielealbano.androidremotecontrolmcp.gms.debug`; tool prefix `android_`; bearer token `AndroidContainerSetup.E2E_BEARER_TOKEN`; `McpClient(baseUrl, bearerToken)`; `stripUntrustedWarning()` exists for device-content responses.
 - Files seeded via adb shell are NON-OWNED (owner = media provider); files written through the app's MCP tools are OWNED. Seeded files are indexed only after an explicit media scan, and land in the MediaStore collection implied by their file extension.
 - **`builtin:downloads` is permanently owned-only** (its collection has `readMediaPermission = null`, so the owner filter always applies): seeded non-owned files under `Download/` are INVISIBLE to the app by design. Therefore ALL seeded-fixture listing/read tests use permissioned locations (`Pictures/`, `DCIM/`, `Music/`, `Recordings/`) with media extensions (`.jpg`/`.mp4`/`.mp3`/`.m4a` — content bytes are irrelevant to indexing), and `Download/` is exercised via app-OWNED write flows plus one dedicated test asserting the seeded-file invisibility itself.
@@ -36,7 +36,7 @@ Why: shared fixtures/permissions/scan/toggle/restart/HTTP-server plumbing used b
 
 **Acceptance criteria**:
 - [x] `StorageE2E` helper object provides seeding, scanning, permission control, toggle + download-settings configuration, process-death wait, server restart with shared-client refresh, and pending/duplicate row insertion
-- [x] `FixtureHttpServer` serves 200/404/slow/truncated endpoints on the fixed exposed port
+- [x] `FixtureHttpServer` serves `/fixture.txt` on the fixed exposed port (it briefly also served 404/slow/truncated endpoints; those transport scenarios now live in `DownloadNetworkLabTest` - see the reconciliation note in `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`)
 - [x] `SharedAndroidContainer` exposes the fixture port before container start and can refresh its cached client
 - [x] `E2EConfigReceiver` gains `download_timeout_seconds` and `allow_http_downloads` extras (debug source set only)
 - [x] No main-source-set production code modified
@@ -49,6 +49,11 @@ Why: shared fixtures/permissions/scan/toggle/restart/HTTP-server plumbing used b
 - [x] Visibility changed; no callers broken
 
 ### Task 1.2: Fixture HTTP server
+
+> Historical task text. The shipped `FixtureHttpServer` keeps only `/fixture.txt`: once H-04 made
+> downloads HTTPS-only the plain-HTTP 404/slow/truncated routes were unreachable on-device, and
+> those scenarios moved to `DownloadNetworkLabTest`. See "E2E reconciliation" in
+> `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`.
 
 **Action 1.2.1** — Create `e2e-tests/src/test/kotlin/com/danielealbano/androidremotecontrolmcp/e2e/FixtureHttpServer.kt`:
 
@@ -369,13 +374,13 @@ Why: end-to-end coverage of all 8 file tools against real MediaStore, in the reg
 - [x] The #154 (path filter), #155 (multi-collection), #156 (recordings) regression classes each have a live-MediaStore test
 - [x] Owned-vs-non-owned filtering verified against real `OWNER_PACKAGE_NAME` values in both directions, including the `builtin:downloads` seeded-file invisibility
 - [x] Toggle gating (allow-write/allow-delete off → denied) verified
-- [x] All download edge scenarios (success, 404, refused, timeout, truncated) exercised through the fixture server
+- [x] Download URL policy (plain HTTP, embedded credentials, metadata/loopback/private literals, obfuscated numeric hosts, unresolvable host) exercised on-device against the fixture server; transport edge scenarios exercised against real TLS in the app-module `DownloadNetworkLabTest` - success/timeout/size-cap/certificate mismatch were already there, and HTTP 404 plus the Content-Length lie were added by the follow-up commit that closed the gap left by re-aiming rows 23-27 (see `docs/security/reports/05-H-04-SSRF-DOWNLOAD.md`, "E2E reconciliation")
 
 ### Task 2.1: E2EStorageToolsTest
 
 **File**: `e2e-tests/src/test/kotlin/com/danielealbano/androidremotecontrolmcp/e2e/E2EStorageToolsTest.kt` (create; `@TestInstance(PER_CLASS)` + `@TestMethodOrder(MethodOrderer.OrderAnnotation::class)` with `@Order(n)` equal to the table row number — required because rows 12/13/16/17/18 form a mutable-file chain on `e2e-rt.txt`; uses `SharedAndroidContainer.mcpClient`; tool names prefixed `android_`; device-content responses unwrapped with `stripUntrustedWarning`)
 
-**Class setup (`@BeforeAll`)**: `grantAllMediaPermissions()`; `configureStorageLocation` allowWrite+allowDelete=true for `builtin:downloads`, `builtin:pictures`, `builtin:dcim`, `builtin:recordings`, `builtin:music` (`builtin:movies` deliberately left false for denial tests); `configureDownloadSettings(10, allowHttp = true)`; start a class-held `FixtureHttpServer` and resolve `<base>` via `containerReachableBaseUrl()` (fallback per header procedure 2); seed the core fixture tree; scan. NO server restart: granting does not kill the process, and all settings/permissions are evaluated live per request.
+**Class setup (`@BeforeAll`)**: `grantAllMediaPermissions()`; `configureStorageLocation` allowWrite+allowDelete=true for `builtin:downloads`, `builtin:pictures`, `builtin:dcim`, `builtin:recordings`, `builtin:music` (`builtin:movies` deliberately left false for denial tests); `configureDownloadSettings(10)`; start a class-held `FixtureHttpServer` and resolve `<base>` via `containerReachableBaseUrl()` (fallback per header procedure 2); seed the core fixture tree; scan. NO server restart: granting does not kill the process, and all settings/permissions are evaluated live per request.
 
 **Core fixture tree** (all seeded = non-owned; media extensions so files land in permissioned collections — see the `builtin:downloads` fact in the header):
 
@@ -419,11 +424,11 @@ Why: end-to-end coverage of all 8 file tools against real MediaStore, in the reg
 | 20 | `delete denied when allow delete disabled` | delete on `builtin:movies` → `isError` permission denied |
 | 21 | `delete of non-owned file reports not found` | delete seeded `Pictures/clip.mp4` → `isError` "not found" — deletes resolve OWNED files only (`findOwnedFileOrThrow`), a security property: the tool can never touch non-owned files |
 | 22 | `write_file to existing non-owned name` | write `readable.jpg` to `pictures` → PINNED (clean error, or new/auto-renamed row; no crash) |
-| 23 | `download_from_url downloads fixture file` | download `<base>/fixture.txt` to `downloads` → read back `FIXTURE_CONTENT` |
-| 24 | `download_from_url 404 returns error and leaves no file` | `<base>/missing.txt` → `isError` mentioning the HTTP failure (NOT the http-disabled gate); target name absent from listing |
-| 25 | `download_from_url connection refused returns error` | URL on an unused port of the same host → `isError`, no file |
-| 26 | `download_from_url times out on slow server` | `<base>/slow.txt` with the configured 10s timeout → `isError` within < `SLOW_DELAY_MS` + margin; no file left |
-| 27 | `download_from_url handles truncated response` | `<base>/truncated.txt` (content-length lie, mid-stream close) → PINNED (clean error, or file with observed size — no crash); server healthy afterwards |
+| 23 | `download_from_url rejects plain HTTP even when the host is reachable` | `<base>/fixture.txt` (plain HTTP, host reachable from the container) → `isError` "Only HTTPS downloads are allowed"; target name absent from listing |
+| 24 | `download_from_url rejects embedded credentials` | `https://user:pass@<host>/e2e.txt` → `isError` "must not contain embedded credentials"; no file |
+| 25 | `download_from_url blocks metadata loopback and private literals` | `https://169.254.169.254/latest/meta-data/`, `https://127.0.0.1/e2e.txt`, `https://10.11.12.13/e2e.txt` → `isError` "Download blocked" each; no file |
+| 26 | `download_from_url rejects non-canonical numeric hosts` | `https://2130706433/e2e.txt`, `https://0177.0.0.1/e2e.txt` → `isError` numeric-host message; no file |
+| 27 | `download_from_url fails closed when the host does not resolve` | `https://download-e2e-fixture.invalid/e2e.txt` → `isError` "Download failed" (NXDOMAIN) or "Download blocked" (hijacking resolver); no file |
 | 28 | `pagination returns stable non-overlapping pages` | `pictures` path=`bulk`, limit=100: pages 100/100/10; union of names == 210 seeded, no duplicates; `total_count==210` on each page; `has_more` true/true/false |
 | 29 | `pagination offset beyond end returns empty page` | offset=1000 → 0 files, `has_more==false`, `total_count==210` |
 | 30 | `limit above cap is coerced to 200` | limit=500 → exactly 200 entries, `has_more==true` |
